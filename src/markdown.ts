@@ -1,8 +1,10 @@
 const RESET = "\x1b[0m";
 const BOLD = "\x1b[1m";
 const DIM = "\x1b[2m";
+const UNDERLINE = "\x1b[4m";
 const CYAN = "\x1b[36m";
 const MAGENTA = "\x1b[35m";
+const YELLOW = "\x1b[33m";
 
 // ---------------------------------------------------------------------------
 // LaTeX → Unicode
@@ -395,14 +397,35 @@ export class MarkdownRenderer {
   }
 
   private renderLeafLine(line: string): string {
-    if (/^#{1,6}\s+\S/.test(line)) {
-      return BOLD + MAGENTA + line + RESET;
+    const headingMatch = line.match(/^(#{1,6})\s+(.+?)\s*#*\s*$/);
+    if (headingMatch) {
+      // Drop the leading `#` markers from the visible output and style by
+      // depth so different levels are distinguishable at a glance.
+      const depth = headingMatch[1].length;
+      const text = inline(headingMatch[2]);
+      return styleHeading(depth, text);
     }
     const bulletMatch = line.match(/^(\s*)[-*]\s+(.*)$/);
     if (bulletMatch) {
       return `${bulletMatch[1]}${DIM}•${RESET} ${inline(bulletMatch[2])}`;
     }
     return inline(line);
+  }
+}
+
+function styleHeading(depth: number, text: string): string {
+  switch (depth) {
+    case 1:
+      return `${BOLD}${UNDERLINE}${MAGENTA}${text}${RESET}`;
+    case 2:
+      return `${BOLD}${MAGENTA}${text}${RESET}`;
+    case 3:
+      return `${BOLD}${CYAN}${text}${RESET}`;
+    case 4:
+      return `${BOLD}${YELLOW}${text}${RESET}`;
+    default:
+      // H5/H6 — bold dim, no color, to keep the visual hierarchy descending.
+      return `${BOLD}${DIM}${text}${RESET}`;
   }
 }
 
