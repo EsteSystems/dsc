@@ -1,8 +1,10 @@
 import { promises as fs } from "node:fs";
-import { spawn } from "node:child_process";
+import { spawn, spawnSync } from "node:child_process";
 import * as path from "node:path";
 import type { ToolSchema } from "./api.js";
-import { confirmBash, confirmEdit, confirmWrite } from "./approval.js";
+import { confirmBash, confirmEdit, confirmFetch, confirmWrite } from "./approval.js";
+
+export const READ_ONLY_TOOLS = new Set(["read_file", "grep", "glob"]);
 
 export const TOOL_SCHEMAS: ToolSchema[] = [
   {
@@ -76,6 +78,59 @@ export const TOOL_SCHEMAS: ToolSchema[] = [
       },
     },
   },
+  {
+    type: "function",
+    function: {
+      name: "grep",
+      description:
+        "Search file contents for a regex pattern. Uses ripgrep (rg) when available, falls back to grep -rn. Output is line-limited; narrow scope with path/glob if it overflows.",
+      parameters: {
+        type: "object",
+        properties: {
+          pattern: { type: "string", description: "Regex pattern (rg/grep -E syntax)." },
+          path: { type: "string", description: "File or directory to search (default: cwd)." },
+          glob: {
+            type: "string",
+            description:
+              "Optional glob filter, e.g. '*.ts' or '!**/node_modules/**'. Passed as --glob to rg or --include to grep.",
+          },
+          case_insensitive: { type: "boolean", description: "Case-insensitive match." },
+        },
+        required: ["pattern"],
+      },
+    },
+  },
+  {
+    type: "function",
+    function: {
+      name: "glob",
+      description:
+        "List filesystem paths matching a glob pattern (e.g. 'src/**/*.ts'). Returns up to 500 paths.",
+      parameters: {
+        type: "object",
+        properties: {
+          pattern: { type: "string", description: "Glob pattern." },
+          path: { type: "string", description: "Base directory (default: cwd)." },
+        },
+        required: ["pattern"],
+      },
+    },
+  },
+  {
+    type: "function",
+    function: {
+      name: "web_fetch",
+      description:
+        "Fetch a URL via HTTP(S) GET. HTML responses are stripped to readable text. Response is size-capped.",
+      parameters: {
+        type: "object",
+        properties: {
+          url: { type: "string", description: "Full URL (http or https)." },
+        },
+        required: ["url"],
+      },
+    },
+  },
 ];
 
 export interface ToolContext {
@@ -112,6 +167,7 @@ export async function executeTool(
   name: string,
   argsJson: string,
   ctx: ToolContext,
+  signal?: AbortSignal,
 ): Promise<ToolResult> {
   let args: Record<string, unknown>;
   try {
@@ -128,7 +184,13 @@ export async function executeTool(
     case "edit_file":
       return editFile(args, ctx);
     case "bash":
-      return runBash(args, ctx);
+      return runBash(args, ctx, signal);
+    case "grep":
+      return runGrep(args, ctx, signal);
+    case "glob":
+      return runGlob(args, ctx);
+    case "web_fetch":
+      return runWebFetch(args, ctx, signal);
     default:
       return { content: `error: unknown tool '${name}'` };
   }
@@ -229,7 +291,11 @@ async function editFile(args: Record<string, unknown>, ctx: ToolContext): Promis
   };
 }
 
-async function runBash(args: Record<string, unknown>, ctx: ToolContext): Promise<ToolResult> {
+async function runBash(
+  args: Record<string, unknown>,
+  ctx: ToolContext,
+  signal?: AbortSignal,
+): Promise<ToolResult> {
   const command = String(args.command ?? "");
   if (!command) return { content: "error: missing 'command'" };
   const timeoutMs = Number(args.timeout_ms) > 0 ? Math.floor(Number(args.timeout_ms)) : 60_000;
@@ -242,18 +308,33 @@ async function runBash(args: Record<string, unknown>, ctx: ToolContext): Promise
     let stdout = "";
     let stderr = "";
     let timedOut = false;
+    let interrupted = false;
     const timer = setTimeout(() => {
       timedOut = true;
       child.kill("SIGKILL");
     }, timeoutMs);
+    const onAbort = () => {
+      interrupted = true;
+      child.kill("SIGTERM");
+    };
+    if (signal) {
+      if (signal.aborted) onAbort();
+      else signal.addEventListener("abort", onAbort, { once: true });
+    }
     child.stdout.on("data", (d) => (stdout += d.toString()));
     child.stderr.on("data", (d) => (stderr += d.toString()));
     child.on("close", (code) => {
       clearTimeout(timer);
+      signal?.removeEventListener("abort", onAbort);
       const MAX = 16_000;
       const trim = (s: string) => (s.length > MAX ? s.slice(0, MAX) + `\n…(truncated, ${s.length - MAX} more chars)` : s);
       const parts: string[] = [];
-      parts.push(`exit_code: ${timedOut ? "killed (timeout)" : code}`);
+      const exitDesc = interrupted
+        ? "killed (interrupted)"
+        : timedOut
+          ? "killed (timeout)"
+          : String(code);
+      parts.push(`exit_code: ${exitDesc}`);
       if (stdout) parts.push(`stdout:\n${trim(stdout)}`);
       if (stderr) parts.push(`stderr:\n${trim(stderr)}`);
       if (!stdout && !stderr) parts.push("(no output)");
@@ -261,7 +342,174 @@ async function runBash(args: Record<string, unknown>, ctx: ToolContext): Promise
     });
     child.on("error", (e) => {
       clearTimeout(timer);
+      signal?.removeEventListener("abort", onAbort);
       resolve({ content: `error: ${e.message}` });
     });
   });
+}
+
+let _hasRg: boolean | undefined;
+function hasRipgrep(): boolean {
+  if (_hasRg !== undefined) return _hasRg;
+  const r = spawnSync("which", ["rg"], { stdio: "ignore" });
+  _hasRg = r.status === 0;
+  return _hasRg;
+}
+
+const GREP_MAX_OUTPUT = 16_000;
+
+async function runGrep(
+  args: Record<string, unknown>,
+  ctx: ToolContext,
+  signal?: AbortSignal,
+): Promise<ToolResult> {
+  const pattern = String(args.pattern ?? "");
+  if (!pattern) return { content: "error: missing 'pattern'" };
+  const searchPath = args.path ? resolvePath(ctx, String(args.path)) : ctx.cwd;
+  const ci = Boolean(args.case_insensitive);
+  const glob = args.glob ? String(args.glob) : null;
+
+  let cmd: string;
+  let cmdArgs: string[];
+  if (hasRipgrep()) {
+    cmd = "rg";
+    cmdArgs = ["--no-heading", "--line-number", "--max-count=200", "--color=never"];
+    if (ci) cmdArgs.push("-i");
+    if (glob) cmdArgs.push("--glob", glob);
+    cmdArgs.push("--", pattern, searchPath);
+  } else {
+    cmd = "grep";
+    cmdArgs = ["-rn", "-E"];
+    if (ci) cmdArgs.push("-i");
+    if (glob) cmdArgs.push(`--include=${glob}`);
+    cmdArgs.push("-e", pattern, searchPath);
+  }
+
+  return new Promise<ToolResult>((resolve) => {
+    const child = spawn(cmd, cmdArgs, { cwd: ctx.cwd });
+    let stdout = "";
+    let stderr = "";
+    let interrupted = false;
+    const onAbort = () => {
+      interrupted = true;
+      child.kill("SIGTERM");
+    };
+    if (signal) {
+      if (signal.aborted) onAbort();
+      else signal.addEventListener("abort", onAbort, { once: true });
+    }
+    child.stdout.on("data", (d) => {
+      stdout += d.toString();
+      if (stdout.length > GREP_MAX_OUTPUT * 2) child.kill("SIGTERM");
+    });
+    child.stderr.on("data", (d) => (stderr += d.toString()));
+    child.on("close", (code) => {
+      signal?.removeEventListener("abort", onAbort);
+      if (interrupted) return resolve({ content: "interrupted" });
+      // grep/rg exit 1 when no matches — treat as a clean "no matches" result.
+      if (code === 1 && !stdout) return resolve({ content: "(no matches)" });
+      if (code !== 0 && code !== null && !stdout) {
+        return resolve({ content: `error: ${cmd} exited ${code}${stderr ? `: ${stderr.trim()}` : ""}` });
+      }
+      let out = stdout.trim();
+      if (out.length > GREP_MAX_OUTPUT) {
+        out = out.slice(0, GREP_MAX_OUTPUT) + `\n…(truncated; narrow the search with path or glob)`;
+      }
+      resolve({ content: out || "(no matches)" });
+    });
+    child.on("error", (e) => {
+      signal?.removeEventListener("abort", onAbort);
+      resolve({ content: `error: ${e.message}` });
+    });
+  });
+}
+
+const GLOB_LIMIT = 500;
+
+async function runGlob(args: Record<string, unknown>, ctx: ToolContext): Promise<ToolResult> {
+  const pattern = String(args.pattern ?? "");
+  if (!pattern) return { content: "error: missing 'pattern'" };
+  const cwd = args.path ? resolvePath(ctx, String(args.path)) : ctx.cwd;
+  const matches: string[] = [];
+  try {
+    // fs.promises.glob is available in Node 22+.
+    const fsAny = fs as unknown as { glob: (p: string, o: { cwd: string }) => AsyncIterable<string> };
+    if (typeof fsAny.glob !== "function") {
+      return { content: "error: fs.glob unavailable; need Node 22+. Use bash with `find` instead." };
+    }
+    for await (const p of fsAny.glob(pattern, { cwd })) {
+      matches.push(p);
+      if (matches.length >= GLOB_LIMIT) break;
+    }
+  } catch (e) {
+    return { content: `error: ${(e as Error).message}` };
+  }
+  if (!matches.length) return { content: "(no matches)" };
+  matches.sort();
+  let out = matches.join("\n");
+  if (matches.length === GLOB_LIMIT) out += `\n…(reached ${GLOB_LIMIT}-path cap; narrow the pattern)`;
+  return { content: out };
+}
+
+const FETCH_MAX = 50_000;
+
+async function runWebFetch(
+  args: Record<string, unknown>,
+  ctx: ToolContext,
+  signal?: AbortSignal,
+): Promise<ToolResult> {
+  const url = String(args.url ?? "");
+  if (!url) return { content: "error: missing 'url'" };
+  if (!/^https?:\/\//i.test(url)) {
+    return { content: "error: url must start with http:// or https://" };
+  }
+  if (!ctx.yolo) {
+    const ok = await confirmFetch(url);
+    if (!ok) return { content: "rejected by user", rejected: true };
+  }
+  let res: Response;
+  try {
+    res = await fetch(url, {
+      headers: { "User-Agent": "dsc/0.1", Accept: "text/html,text/plain,*/*" },
+      signal,
+      redirect: "follow",
+    });
+  } catch (e) {
+    if ((e as Error).name === "AbortError") return { content: "interrupted" };
+    return { content: `error: ${(e as Error).message}` };
+  }
+  if (!res.ok) {
+    return { content: `error: HTTP ${res.status} ${res.statusText}` };
+  }
+  const ct = res.headers.get("content-type") ?? "";
+  let text: string;
+  try {
+    text = await res.text();
+  } catch (e) {
+    return { content: `error: ${(e as Error).message}` };
+  }
+  if (/html|xml/i.test(ct)) text = stripHtml(text);
+  if (text.length > FETCH_MAX) {
+    text = text.slice(0, FETCH_MAX) + `\n…(truncated, ${text.length - FETCH_MAX} more chars)`;
+  }
+  return { content: text || "(empty body)" };
+}
+
+function stripHtml(html: string): string {
+  return html
+    .replace(/<script\b[^>]*>[\s\S]*?<\/script>/gi, "")
+    .replace(/<style\b[^>]*>[\s\S]*?<\/style>/gi, "")
+    .replace(/<!--[\s\S]*?-->/g, "")
+    .replace(/<br\s*\/?>/gi, "\n")
+    .replace(/<\/?(p|div|li|h[1-6]|tr)\b[^>]*>/gi, "\n")
+    .replace(/<[^>]+>/g, "")
+    .replace(/&nbsp;/g, " ")
+    .replace(/&amp;/g, "&")
+    .replace(/&lt;/g, "<")
+    .replace(/&gt;/g, ">")
+    .replace(/&quot;/g, '"')
+    .replace(/&#39;/g, "'")
+    .replace(/[ \t]+\n/g, "\n")
+    .replace(/\n{3,}/g, "\n\n")
+    .trim();
 }

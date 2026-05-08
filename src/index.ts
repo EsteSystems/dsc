@@ -6,7 +6,6 @@ import {
   DeepSeekError,
   configPath,
   hasApiKey,
-  newStats,
   type Message,
   type Model,
 } from "./api.js";
@@ -28,6 +27,7 @@ interface Cli {
   prompt?: string;
   help?: boolean;
   resume: boolean;
+  resumeId?: string;
   modelExplicit: boolean;
 }
 
@@ -47,6 +47,13 @@ function parseArgs(argv: string[]): Cli {
       out.modelExplicit = true;
     } else if (a === "--no-resume") {
       out.resume = false;
+    } else if (a === "--resume") {
+      const v = argv[i + 1];
+      if (v && !v.startsWith("-")) {
+        out.resumeId = v;
+        i++;
+      }
+      out.resume = true;
     } else if (a === "--help" || a === "-h") {
       out.help = true;
     } else if (a.startsWith("-")) {
@@ -69,7 +76,8 @@ Usage:
 Flags:
   -m, --model <name>        Model: ${AVAILABLE_MODELS.join(" | ")} (default: ${DEFAULT_MODEL})
   -y, --yolo                Skip approval prompts for write/edit/bash
-      --no-resume           Don't auto-load .dsc-history.json from cwd
+      --no-resume           Start a fresh session instead of resuming
+      --resume [id]         Resume a session (default: most recent for this cwd)
   -h, --help                Show this help
 
 API key (in priority order):
@@ -81,11 +89,13 @@ API key (in priority order):
                               {"env": {"ANTHROPIC_AUTH_TOKEN": "sk-..."}}  (claude-switcher compat)
 
 REPL commands:
-  /clear     Reset conversation
-  /cost      Show token usage and estimated cost
-  /model     Show or switch model (e.g. /model deepseek-v4-flash)
-  /yolo      Toggle approval mode
-  /exit      Quit
+  /clear         Start a new session (current one stays on disk)
+  /cost          Show token usage and estimated cost
+  /model         Show or switch model (e.g. /model deepseek-v4-flash)
+  /yolo          Toggle approval mode
+  /list          List sessions in this cwd
+  /resume <#>    Resume a session by index from /list (or 'last')
+  /exit          Quit
 `);
 }
 
@@ -111,20 +121,39 @@ async function main(): Promise<void> {
   }
 
   const cwd = process.cwd();
-  let stats = newStats();
-  let messages: Message[] = [{ role: "system", content: SYSTEM_PROMPT }];
-  let model: Model = cli.model;
+
+  // Migrate old per-cwd file to the new sessions dir if present.
+  await history.migrateLegacyIfPresent(cwd, cli.model);
+
+  let session: history.SessionState = history.newSession(cwd, cli.model);
+  // Always seed with the system prompt; loadSession may replace the array entirely.
+  session.messages.push({ role: "system", content: SYSTEM_PROMPT });
 
   let restoredTurns = 0;
   if (cli.resume) {
-    const loaded = await history.load(cwd);
-    if (loaded) {
-      messages = loaded.messages;
-      stats = loaded.stats;
-      if (!cli.modelExplicit) model = loaded.model;
-      restoredTurns = messages.filter((m) => m.role === "user").length;
+    let target: history.SessionMeta | null = null;
+    if (cli.resumeId) {
+      const loaded = await history.loadSession(cli.resumeId);
+      if (loaded) {
+        session = loaded;
+        target = { id: loaded.id } as history.SessionMeta;
+      } else {
+        process.stderr.write(`${RED}session not found: ${cli.resumeId}${RESET}\n`);
+        process.exit(1);
+      }
+    } else {
+      target = await history.mostRecentForCwd(cwd);
+      if (target) {
+        const loaded = await history.loadSession(target.id);
+        if (loaded) session = loaded;
+      }
     }
+    restoredTurns = session.messages.filter((m) => m.role === "user").length;
   }
+
+  let messages: Message[] = session.messages;
+  let stats = session.stats;
+  let model: Model = cli.modelExplicit ? cli.model : session.model;
 
   const toolCtx: ToolContext = {
     cwd,
@@ -134,7 +163,10 @@ async function main(): Promise<void> {
 
   const persist = async () => {
     try {
-      await history.save(cwd, messages, stats, model);
+      session.model = model;
+      session.messages = messages;
+      session.stats = stats;
+      await history.saveSession(session);
     } catch (e) {
       process.stderr.write(`${DIM}(history save failed: ${(e as Error).message})${RESET}\n`);
     }
@@ -143,17 +175,49 @@ async function main(): Promise<void> {
   const statusBar = new StatusBar();
   const refreshStatus = () => statusBar.render(formatStatus(stats, model, toolCtx.yolo));
 
+  let pendingAbort: AbortController | null = null;
+
+  const formatApiError = (e: DeepSeekError): string => {
+    if (e.status === 401) {
+      return `API key rejected (401). Check $DEEPSEEK_API_KEY or ${configPath()}.`;
+    }
+    if (e.status === 429) return "Rate-limited (429). Try again in a moment.";
+    if (e.status === 400 && e.body) {
+      let detail = e.body;
+      try {
+        const parsed = JSON.parse(e.body);
+        detail = parsed?.error?.message ?? detail;
+      } catch {}
+      return `Bad request (400): ${detail}`;
+    }
+    return e.message;
+  };
+
   const runTurn = async (userText: string) => {
     messages.push({ role: "user", content: userText });
+    pendingAbort = new AbortController();
     try {
-      await runAgent({ model, stats, toolCtx, messages, onTurn: refreshStatus });
+      await runAgent({
+        model,
+        stats,
+        toolCtx,
+        messages,
+        signal: pendingAbort.signal,
+        onTurn: refreshStatus,
+      });
     } catch (e) {
-      if (e instanceof DeepSeekError) {
-        process.stderr.write(`${RED}${e.message}${RESET}\n`);
-        if (e.body) process.stderr.write(`${DIM}${e.body.slice(0, 1000)}${RESET}\n`);
+      if ((e as Error).name === "AbortError" || pendingAbort?.signal.aborted) {
+        process.stderr.write(`\n${DIM}(interrupted)${RESET}\n`);
+      } else if (e instanceof DeepSeekError) {
+        process.stderr.write(`\n${RED}${formatApiError(e)}${RESET}\n`);
+        if (e.body && e.status !== 400) {
+          process.stderr.write(`${DIM}${e.body.slice(0, 1000)}${RESET}\n`);
+        }
       } else {
-        process.stderr.write(`${RED}${(e as Error).message}${RESET}\n`);
+        process.stderr.write(`\n${RED}${(e as Error).message}${RESET}\n`);
       }
+    } finally {
+      pendingAbort = null;
     }
     refreshStatus();
     await persist();
@@ -177,9 +241,20 @@ async function main(): Promise<void> {
   refreshStatus();
   const cleanup = () => statusBar.disable();
   process.on("exit", cleanup);
+
+  let lastSigintMs = 0;
   process.on("SIGINT", () => {
-    cleanup();
-    process.exit(130);
+    if (pendingAbort && !pendingAbort.signal.aborted) {
+      pendingAbort.abort();
+      return;
+    }
+    const now = Date.now();
+    if (now - lastSigintMs < 1000) {
+      cleanup();
+      process.exit(130);
+    }
+    lastSigintMs = now;
+    process.stdout.write(`\n${DIM}(press Ctrl+C again within 1s to exit)${RESET}\n`);
   });
 
   const rl = readline.createInterface({ input, output });
@@ -203,13 +278,59 @@ async function main(): Promise<void> {
       } else if (cmd === "help") {
         printHelp();
       } else if (cmd === "clear") {
-        messages.length = 0;
-        messages.push({ role: "system", content: SYSTEM_PROMPT });
-        stats = newStats();
+        // Start a brand-new session; old session stays on disk.
+        session = history.newSession(cwd, model);
+        session.messages.push({ role: "system", content: SYSTEM_PROMPT });
+        messages = session.messages;
+        stats = session.stats;
         toolCtx.filesTouched = stats.files_touched;
-        await history.clear(cwd);
         refreshStatus();
-        process.stdout.write(`${DIM}history cleared${RESET}\n`);
+        process.stdout.write(`${DIM}new session started (${session.id})${RESET}\n`);
+      } else if (cmd === "list") {
+        const all = await history.listSessions(cwd);
+        if (!all.length) {
+          process.stdout.write(`${DIM}no sessions for ${cwd}${RESET}\n`);
+        } else {
+          all.forEach((s, i) => {
+            const ago = formatRelative(s.updated_at);
+            const here = s.id === session.id ? `${BOLD}*${RESET} ` : "  ";
+            process.stdout.write(
+              `${here}${String(i + 1).padStart(2, " ")}. ${s.model}  ${ago}  (${s.message_count} msgs)  ${DIM}${s.first_user_message || "—"}${RESET}\n`,
+            );
+          });
+        }
+      } else if (cmd === "resume") {
+        const all = await history.listSessions(cwd);
+        if (!all.length) {
+          process.stdout.write(`${DIM}no sessions to resume${RESET}\n`);
+        } else {
+          let target: history.SessionMeta | null = null;
+          if (!arg || arg === "last") {
+            target = all[0];
+          } else if (/^\d+$/.test(arg)) {
+            const idx = parseInt(arg, 10) - 1;
+            target = all[idx] ?? null;
+            if (!target) process.stdout.write(`${RED}no session at index ${arg} (have ${all.length})${RESET}\n`);
+          } else {
+            target = all.find((s) => s.id === arg) ?? null;
+            if (!target) process.stdout.write(`${RED}no session with id ${arg}${RESET}\n`);
+          }
+          if (target) {
+            const loaded = await history.loadSession(target.id);
+            if (!loaded) {
+              process.stdout.write(`${RED}failed to load session ${target.id}${RESET}\n`);
+            } else {
+              session = loaded;
+              messages = session.messages;
+              stats = session.stats;
+              model = session.model;
+              toolCtx.filesTouched = stats.files_touched;
+              refreshStatus();
+              const userTurns = messages.filter((m) => m.role === "user").length;
+              process.stdout.write(`${DIM}resumed ${session.id} (${userTurns} turns, model ${model})${RESET}\n`);
+            }
+          }
+        }
       } else if (cmd === "cost") {
         process.stdout.write(`${DIM}${formatCost(stats, model)}${RESET}\n`);
       } else if (cmd === "model") {
@@ -239,6 +360,17 @@ async function main(): Promise<void> {
   rl.close();
   statusBar.disable();
   process.stdout.write(`\n${DIM}${formatCost(stats, model)}${RESET}\n`);
+}
+
+function formatRelative(ts: number): string {
+  const s = Math.max(0, Math.floor((Date.now() - ts) / 1000));
+  if (s < 60) return `${s}s ago`;
+  const m = Math.floor(s / 60);
+  if (m < 60) return `${m}m ago`;
+  const h = Math.floor(m / 60);
+  if (h < 24) return `${h}h ago`;
+  const d = Math.floor(h / 24);
+  return `${d}d ago`;
 }
 
 main().catch((e) => {

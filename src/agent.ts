@@ -6,8 +6,9 @@ import {
   type Model,
   type Stats,
 } from "./api.js";
-import { TOOL_SCHEMAS, executeTool, type ToolContext } from "./tools.js";
+import { READ_ONLY_TOOLS, TOOL_SCHEMAS, executeTool, type ToolContext } from "./tools.js";
 import { Spinner } from "./ui.js";
+import { MarkdownRenderer } from "./markdown.js";
 
 export const MAX_TOOL_DEPTH = 8;
 
@@ -18,6 +19,7 @@ const RESET = "\x1b[0m";
 
 function streamHandlers(spinner: Spinner) {
   let started = false;
+  const renderer = new MarkdownRenderer();
   return {
     onContent: (text: string) => {
       if (!started) {
@@ -25,10 +27,13 @@ function streamHandlers(spinner: Spinner) {
         process.stdout.write(`${BOLD}assistant${RESET}: `);
         started = true;
       }
-      process.stdout.write(text);
+      process.stdout.write(renderer.push(text));
     },
     flush: () => {
-      if (started) process.stdout.write("\n");
+      if (started) {
+        process.stdout.write(renderer.flush());
+        process.stdout.write("\n");
+      }
     },
     started: () => started,
   };
@@ -90,11 +95,11 @@ export async function runAgent(opts: RunOptions): Promise<void> {
 
       const toolSpinner = new Spinner(`running ${name}`);
       // Don't spin tools that need approval (interactive prompt).
-      const interactive = name !== "read_file" && !toolCtx.yolo;
+      const interactive = !READ_ONLY_TOOLS.has(name) && !toolCtx.yolo;
       if (!interactive) toolSpinner.start();
       let result;
       try {
-        result = await executeTool(name, argsRaw, toolCtx);
+        result = await executeTool(name, argsRaw, toolCtx, signal);
       } finally {
         toolSpinner.stop();
       }

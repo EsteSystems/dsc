@@ -188,7 +188,61 @@ interface StreamToolCallAcc {
   function: { name: string; arguments: string };
 }
 
+const RETRY_STATUSES = new Set([429, 502, 503, 504]);
+const MAX_RETRY_ATTEMPTS = 3;
+
+const DIM = "\x1b[2m";
+const RESET = "\x1b[0m";
+
+function isAbortError(e: unknown): boolean {
+  return e instanceof Error && (e.name === "AbortError" || (e as { code?: string }).code === "ABORT_ERR");
+}
+
+function isRetriableNetworkError(e: unknown): boolean {
+  // fetch() throws TypeError for network errors in undici (Node 18+).
+  if (!(e instanceof Error)) return false;
+  if (e.name === "TypeError") return true;
+  const code = (e as { cause?: { code?: string } }).cause?.code;
+  return code === "ECONNRESET" || code === "ETIMEDOUT" || code === "ECONNREFUSED" || code === "ENOTFOUND";
+}
+
+function sleep(ms: number, signal?: AbortSignal): Promise<void> {
+  return new Promise((resolve, reject) => {
+    if (signal?.aborted) return reject(new DOMException("Aborted", "AbortError"));
+    const t = setTimeout(resolve, ms);
+    signal?.addEventListener(
+      "abort",
+      () => {
+        clearTimeout(t);
+        reject(new DOMException("Aborted", "AbortError"));
+      },
+      { once: true },
+    );
+  });
+}
+
 export async function chatStream(opts: StreamOptions): Promise<ChatResponse> {
+  for (let attempt = 1; ; attempt++) {
+    try {
+      return await streamOnce(opts);
+    } catch (e) {
+      if (isAbortError(e)) throw e;
+      const transient =
+        (e instanceof DeepSeekError && e.status !== undefined && RETRY_STATUSES.has(e.status)) ||
+        isRetriableNetworkError(e);
+      if (!transient || attempt >= MAX_RETRY_ATTEMPTS) throw e;
+      const delay = 1000 * Math.pow(2, attempt - 1);
+      const reason =
+        e instanceof DeepSeekError && e.status ? `HTTP ${e.status}` : (e as Error).message;
+      process.stderr.write(
+        `${DIM}(${reason}; retrying in ${Math.round(delay / 1000)}s, attempt ${attempt + 1}/${MAX_RETRY_ATTEMPTS})${RESET}\n`,
+      );
+      await sleep(delay, opts.signal);
+    }
+  }
+}
+
+async function streamOnce(opts: StreamOptions): Promise<ChatResponse> {
   const apiKey = getApiKey();
   const body: Record<string, unknown> = {
     model: opts.model,

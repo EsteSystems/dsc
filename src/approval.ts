@@ -81,3 +81,9 @@ export async function confirmBash(command: string, description: string): Promise
   process.stdout.write(`  $ ${command}\n`);
   return ask(`Run? [y/N] `);
 }
+
+export async function confirmFetch(url: string): Promise<boolean> {
+  process.stdout.write(`\n${YELLOW}Fetch URL${RESET}\n`);
+  process.stdout.write(`  ${url}\n`);
+  return ask(`Fetch? [y/N] `);
+}
