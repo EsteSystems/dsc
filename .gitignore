@@ -4,3 +4,4 @@ dist/
 .env
 .DS_Store
 .dsc-history.json
+plan.md
