@@ -10,7 +10,6 @@ import {
   type Model,
 } from "./api.js";
 import { runAgent, formatCost, formatStatus, estimateContextTokens } from "./agent.js";
-import { SYSTEM_PROMPT } from "./prompt.js";
 import type { ToolContext } from "./tools.js";
 import * as history from "./history.js";
 import * as approval from "./approval.js";
@@ -137,8 +136,8 @@ async function main(): Promise<void> {
   await history.migrateLegacyIfPresent(cwd, cli.model);
 
   let session: history.SessionState = history.newSession(cwd, cli.model);
-  // Always seed with the system prompt; loadSession may replace the array entirely.
-  session.messages.push({ role: "system", content: SYSTEM_PROMPT });
+  // The system prompt is rebuilt per turn inside runAgent so cwd/date/status
+  // are always current — we no longer persist a stale copy at messages[0].
 
   let restoredTurns = 0;
   if (cli.resume) {
@@ -187,15 +186,14 @@ async function main(): Promise<void> {
   const statusBar = new StatusBar();
   const sessionStart = Date.now();
   let showReasoning = true;
-  const refreshStatus = () =>
-    statusBar.render(
-      formatStatus(stats, model, {
-        yolo: toolCtx.yolo,
-        reasoning: showReasoning,
-        contextTokens: estimateContextTokens(messages),
-        sessionSeconds: Math.floor((Date.now() - sessionStart) / 1000),
-      }),
-    );
+  const currentStatusLine = () =>
+    formatStatus(stats, model, {
+      yolo: toolCtx.yolo,
+      reasoning: showReasoning,
+      contextTokens: estimateContextTokens(messages),
+      sessionSeconds: Math.floor((Date.now() - sessionStart) / 1000),
+    });
+  const refreshStatus = () => statusBar.render(currentStatusLine());
 
   let pendingAbort: AbortController | null = null;
 
@@ -227,6 +225,7 @@ async function main(): Promise<void> {
         signal: pendingAbort.signal,
         onTurn: refreshStatus,
         showReasoning,
+        getStatusLine: currentStatusLine,
       });
     } catch (e) {
       if ((e as Error).name === "AbortError" || pendingAbort?.signal.aborted) {
@@ -312,9 +311,9 @@ async function main(): Promise<void> {
       } else if (cmd === "help") {
         printHelp();
       } else if (cmd === "clear") {
-        // Start a brand-new session; old session stays on disk.
+        // Start a brand-new session; old session stays on disk. System prompt
+        // is rebuilt per turn so we don't seed messages with one.
         session = history.newSession(cwd, model);
-        session.messages.push({ role: "system", content: SYSTEM_PROMPT });
         messages = session.messages;
         stats = session.stats;
         toolCtx.filesTouched = stats.files_touched;

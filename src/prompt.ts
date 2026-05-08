@@ -1,4 +1,8 @@
 // last touched: 2026-06-08
+
+// Static prefix — kept byte-identical across calls so DeepSeek's prompt-prefix
+// cache hits it on every turn. Dynamic per-turn context is appended via
+// buildSystemPrompt below; only those tail bytes are billed at miss rate.
 export const SYSTEM_PROMPT = `You are dsc, a CLI coding assistant powered by DeepSeek. You operate inside the user's terminal in their working directory and can edit files and run shell commands via tools.
 
 Available tools:
@@ -18,3 +22,23 @@ Rules:
 - Use relative paths in tool calls when natural; absolute paths are fine too.
 - After making changes, give a one or two sentence summary of what you did. Don't repeat file contents the user can see.
 - Do not invent files or APIs you haven't read. Use read_file or bash (grep/ls/find) to check.`;
+
+export interface PromptContext {
+  cwd: string;
+  date: Date;
+  /** Pre-formatted status line (model · cost · tokens · ctx · session). */
+  statusLine?: string;
+}
+
+/**
+ * Returns the static system prompt followed by a small dynamic block with the
+ * cwd, date, and current status line. Static text comes first so the
+ * prefix-cache prefix stays stable; only the trailing bytes vary per turn.
+ */
+export function buildSystemPrompt(ctx: PromptContext): string {
+  const lines: string[] = [SYSTEM_PROMPT, "", "Current context:"];
+  lines.push(`- cwd: ${ctx.cwd}`);
+  lines.push(`- date: ${ctx.date.toISOString().slice(0, 10)}`);
+  if (ctx.statusLine) lines.push(`- status: ${ctx.statusLine}`);
+  return lines.join("\n");
+}

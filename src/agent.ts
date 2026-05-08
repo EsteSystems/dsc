@@ -9,6 +9,7 @@ import {
 import { READ_ONLY_TOOLS, TOOL_SCHEMAS, executeTool, type ToolContext } from "./tools.js";
 import { Spinner } from "./ui.js";
 import { MarkdownRenderer } from "./markdown.js";
+import { buildSystemPrompt } from "./prompt.js";
 
 export const MAX_TOOL_DEPTH = 8;
 
@@ -68,11 +69,31 @@ export interface RunOptions {
   signal?: AbortSignal;
   onTurn?: () => void; // called after each API response so the caller can refresh the status bar
   showReasoning?: boolean; // default true
+  /** Returns the line that gets embedded into the system prompt. Called fresh
+   *  before every chatStream so the model sees the latest cost/ctx numbers. */
+  getStatusLine?: () => string;
 }
 
 export async function runAgent(opts: RunOptions): Promise<void> {
   const { messages, model, stats, toolCtx, signal, onTurn } = opts;
   const showReasoning = opts.showReasoning ?? true;
+
+  // Build the message list to send: drop any leading system entry the caller
+  // may have stashed (e.g. from an older session) and prepend a freshly-built
+  // one so cwd/date/status reflect the current turn.
+  const conversationMessages = (): Message[] =>
+    messages[0]?.role === "system" ? messages.slice(1) : messages.slice();
+  const buildApi = (): Message[] => [
+    {
+      role: "system",
+      content: buildSystemPrompt({
+        cwd: toolCtx.cwd,
+        date: new Date(),
+        statusLine: opts.getStatusLine?.(),
+      }),
+    },
+    ...conversationMessages(),
+  ];
 
   for (let depth = 0; depth < MAX_TOOL_DEPTH; depth++) {
     stats.prompts += 1;
@@ -83,7 +104,7 @@ export async function runAgent(opts: RunOptions): Promise<void> {
     try {
       resp = await chatStream({
         model,
-        messages,
+        messages: buildApi(),
         tools: TOOL_SCHEMAS,
         signal,
         onContent: handlers.onContent,
@@ -152,7 +173,7 @@ export async function runAgent(opts: RunOptions): Promise<void> {
   try {
     final = await chatStream({
       model,
-      messages,
+      messages: buildApi(),
       tools: undefined,
       signal,
       onContent: handlers.onContent,
