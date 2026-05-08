@@ -9,6 +9,7 @@ Available tools:
 - grep(pattern, path?, glob?, case_insensitive?): regex search across files (ripgrep when available, grep -rn fallback). Prefer this over running grep through bash for finding code.
 - glob(pattern, path?): list paths matching a glob (e.g. 'src/**/*.ts'). Prefer this over running find through bash.
 - web_fetch(url): GET a URL; HTML is stripped to text.
+- web_search(query, count?, freshness?): search the web. Returns numbered title/url/snippet entries. Pair with web_fetch to read the full content of any specific URL.
 
 Rules:
 - Edits and shell commands may require user approval before they run; if a tool call returns "rejected by user", do not retry the same call. Ask the user what to change instead.

@@ -86,23 +86,38 @@ export function configPath(): string {
 }
 
 let _cachedKey: string | undefined;
+let _cachedConfig: Record<string, unknown> | null | undefined;
 
-function readKeyFromFile(): string | null {
+// Returns the parsed deepseek.json (cached). null when the file doesn't exist;
+// throws DeepSeekError on invalid JSON. Shared by getApiKey and the search
+// module so secrets and provider config can live in one place.
+export function getConfig(): Record<string, unknown> | null {
+  if (_cachedConfig !== undefined) return _cachedConfig;
   const p = configPath();
   let text: string;
   try {
     text = readFileSync(p, "utf8");
   } catch {
+    _cachedConfig = null;
     return null;
   }
   let data: unknown;
   try {
     data = JSON.parse(text);
-  } catch (e) {
+  } catch {
     throw new DeepSeekError(`config file is not valid JSON: ${p}`);
   }
-  if (!data || typeof data !== "object") return null;
-  const obj = data as Record<string, unknown>;
+  if (!data || typeof data !== "object") {
+    _cachedConfig = null;
+    return null;
+  }
+  _cachedConfig = data as Record<string, unknown>;
+  return _cachedConfig;
+}
+
+function readKeyFromFile(): string | null {
+  const obj = getConfig();
+  if (!obj) return null;
   // Accept several shapes:
   //   {"api_key": "sk-..."}
   //   {"DEEPSEEK_API_KEY": "sk-..."}

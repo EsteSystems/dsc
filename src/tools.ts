@@ -4,8 +4,9 @@ import * as path from "node:path";
 import type { ToolSchema } from "./api.js";
 import { confirmBash, confirmEdit, confirmFetch, confirmWrite } from "./approval.js";
 import * as audit from "./audit.js";
+import { search as runSearchProvider, formatResults, getProvider, SearchError } from "./search.js";
 
-export const READ_ONLY_TOOLS = new Set(["read_file", "grep", "glob"]);
+export const READ_ONLY_TOOLS = new Set(["read_file", "grep", "glob", "web_search"]);
 
 export const TOOL_SCHEMAS: ToolSchema[] = [
   {
@@ -132,6 +133,30 @@ export const TOOL_SCHEMAS: ToolSchema[] = [
       },
     },
   },
+  {
+    type: "function",
+    function: {
+      name: "web_search",
+      description:
+        "Search the web for a query. Returns up to 20 results as numbered title/url/snippet entries. Pair with web_fetch to read the full content of any specific URL the search returns.",
+      parameters: {
+        type: "object",
+        properties: {
+          query: { type: "string", description: "Search query." },
+          count: {
+            type: "integer",
+            description: "How many results to return (1-20, default 5).",
+          },
+          freshness: {
+            type: "string",
+            enum: ["day", "week", "month", "year"],
+            description: "Limit to results from the last day/week/month/year.",
+          },
+        },
+        required: ["query"],
+      },
+    },
+  },
 ];
 
 export interface ToolContext {
@@ -206,6 +231,9 @@ export async function executeTool(
       break;
     case "web_fetch":
       result = await runWebFetch(args, ctx, signal);
+      break;
+    case "web_search":
+      result = await runWebSearch(args, signal);
       break;
     default:
       result = { content: `error: unknown tool '${name}'`, audit: { error: "unknown_tool" } };
@@ -606,4 +634,55 @@ function stripHtml(html: string): string {
     .replace(/[ \t]+\n/g, "\n")
     .replace(/\n{3,}/g, "\n\n")
     .trim();
+}
+
+async function runWebSearch(
+  args: Record<string, unknown>,
+  signal?: AbortSignal,
+): Promise<ToolResult> {
+  const query = String(args.query ?? "").trim();
+  if (!query) return { content: "error: missing 'query'", audit: { error: "missing_query" } };
+  const count = Number(args.count) > 0 ? Math.min(20, Math.floor(Number(args.count))) : 5;
+  const freshness =
+    args.freshness === "day" ||
+    args.freshness === "week" ||
+    args.freshness === "month" ||
+    args.freshness === "year"
+      ? args.freshness
+      : undefined;
+  const provider = getProvider();
+  try {
+    const results = await runSearchProvider({ query, count, freshness, signal });
+    return {
+      content: formatResults(results),
+      audit: {
+        provider,
+        query: query.slice(0, 200),
+        count,
+        freshness: freshness ?? null,
+        results: results.length,
+      },
+    };
+  } catch (e) {
+    if ((e as Error).name === "AbortError") {
+      return {
+        content: "interrupted",
+        audit: { provider, query: query.slice(0, 200), error: "interrupted" },
+      };
+    }
+    if (e instanceof SearchError) {
+      return {
+        content: `error: ${e.message}`,
+        audit: {
+          provider,
+          query: query.slice(0, 200),
+          error: e.status ? `http_${e.status}` : "search_failed",
+        },
+      };
+    }
+    return {
+      content: `error: ${(e as Error).message}`,
+      audit: { provider, query: query.slice(0, 200), error: "search_failed" },
+    };
+  }
 }
