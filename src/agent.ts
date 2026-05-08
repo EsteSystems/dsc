@@ -18,7 +18,7 @@ const ITALIC = "\x1b[3m";
 const RED = "\x1b[31m";
 const RESET = "\x1b[0m";
 
-function streamHandlers(spinner: Spinner) {
+function streamHandlers(spinner: Spinner, showReasoning: boolean) {
   let contentStarted = false;
   let reasoningStarted = false;
   const renderer = new MarkdownRenderer();
@@ -39,6 +39,7 @@ function streamHandlers(spinner: Spinner) {
     },
     onReasoning: (text: string) => {
       spinner.bump();
+      if (!showReasoning) return; // hidden — keep the spinner alive though
       if (contentStarted) return; // ignore stray reasoning after content has started
       if (!reasoningStarted) {
         spinner.stop();
@@ -66,16 +67,18 @@ export interface RunOptions {
   messages: Message[]; // mutated in place; pass full conversation
   signal?: AbortSignal;
   onTurn?: () => void; // called after each API response so the caller can refresh the status bar
+  showReasoning?: boolean; // default true
 }
 
 export async function runAgent(opts: RunOptions): Promise<void> {
   const { messages, model, stats, toolCtx, signal, onTurn } = opts;
+  const showReasoning = opts.showReasoning ?? true;
 
   for (let depth = 0; depth < MAX_TOOL_DEPTH; depth++) {
     stats.prompts += 1;
     const spinner = new Spinner("thinking");
     spinner.start();
-    const handlers = streamHandlers(spinner);
+    const handlers = streamHandlers(spinner, showReasoning);
     let resp;
     try {
       resp = await chatStream({
@@ -144,7 +147,7 @@ export async function runAgent(opts: RunOptions): Promise<void> {
   stats.prompts += 1;
   const spinner = new Spinner("wrapping up");
   spinner.start();
-  const handlers = streamHandlers(spinner);
+  const handlers = streamHandlers(spinner, showReasoning);
   let final;
   try {
     final = await chatStream({
@@ -173,10 +176,46 @@ export function formatCost(stats: Stats, model: Model): string {
   return `cost: $${cost.toFixed(4)}  in: ${stats.prompt_tokens} (hit ${stats.cache_hit_tokens} / miss ${stats.cache_miss_tokens})  out: ${stats.completion_tokens}  tools: ${stats.tool_calls_total}`;
 }
 
-export function formatStatus(stats: Stats, model: Model, yolo: boolean): string {
+export interface StatusOptions {
+  yolo: boolean;
+  reasoning?: boolean; // if false, append " no-reasoning"
+  contextTokens?: number; // current message-list size, for context-budget feel
+  sessionSeconds?: number; // wall-clock since REPL start
+}
+
+export function formatStatus(stats: Stats, model: Model, opts: StatusOptions): string {
   const cost = computeCostUsd(stats, model);
-  const flags = yolo ? " yolo" : "";
-  return `${model}${flags} · $${cost.toFixed(4)}  in: ${stats.prompt_tokens} (hit ${stats.cache_hit_tokens} / miss ${stats.cache_miss_tokens})  out: ${stats.completion_tokens}  tools: ${stats.tool_calls_total}`;
+  const flags =
+    (opts.yolo ? " yolo" : "") + (opts.reasoning === false ? " no-reasoning" : "");
+  const ctx =
+    opts.contextTokens !== undefined ? `  ctx:${formatCount(opts.contextTokens)}` : "";
+  const session =
+    opts.sessionSeconds !== undefined ? `  ${formatDuration(opts.sessionSeconds)}` : "";
+  return `${model}${flags} · $${cost.toFixed(4)}  in: ${stats.prompt_tokens} (hit ${stats.cache_hit_tokens} / miss ${stats.cache_miss_tokens})  out: ${stats.completion_tokens}  tools: ${stats.tool_calls_total}${ctx}${session}`;
+}
+
+// Rough estimate based on stored message bodies; 1 token ≈ 4 chars.
+export function estimateContextTokens(messages: Message[]): number {
+  let total = 0;
+  for (const m of messages) {
+    if (typeof m.content === "string") total += Math.ceil(m.content.length / 4);
+    if (typeof m.reasoning_content === "string") total += Math.ceil(m.reasoning_content.length / 4);
+  }
+  return total;
+}
+
+function formatCount(n: number): string {
+  if (n >= 1_000_000) return (n / 1_000_000).toFixed(1) + "M";
+  if (n >= 1_000) return (n / 1_000).toFixed(1) + "K";
+  return String(n);
+}
+
+function formatDuration(s: number): string {
+  const h = Math.floor(s / 3600);
+  const m = Math.floor((s % 3600) / 60);
+  const sec = s % 60;
+  if (h > 0) return `${h}:${String(m).padStart(2, "0")}:${String(sec).padStart(2, "0")}`;
+  return `${m}:${String(sec).padStart(2, "0")}`;
 }
 
 function truncate(s: string, n: number): string {

@@ -9,7 +9,7 @@ import {
   type Message,
   type Model,
 } from "./api.js";
-import { runAgent, formatCost, formatStatus } from "./agent.js";
+import { runAgent, formatCost, formatStatus, estimateContextTokens } from "./agent.js";
 import { SYSTEM_PROMPT } from "./prompt.js";
 import type { ToolContext } from "./tools.js";
 import * as history from "./history.js";
@@ -95,6 +95,9 @@ REPL commands:
   /cost          Show token usage and estimated cost
   /model         Show or switch model (e.g. /model deepseek-v4-flash)
   /yolo          Toggle approval mode
+  /reasoning [on|off]
+                 Show or hide reasoning_content streamed by thinking models
+                 (toggle when no arg)
   /list          List sessions in this cwd
   /resume <#>    Resume a session by index from /list (or 'last')
   /audit         Print where the JSONL audit log lives
@@ -182,7 +185,17 @@ async function main(): Promise<void> {
   };
 
   const statusBar = new StatusBar();
-  const refreshStatus = () => statusBar.render(formatStatus(stats, model, toolCtx.yolo));
+  const sessionStart = Date.now();
+  let showReasoning = true;
+  const refreshStatus = () =>
+    statusBar.render(
+      formatStatus(stats, model, {
+        yolo: toolCtx.yolo,
+        reasoning: showReasoning,
+        contextTokens: estimateContextTokens(messages),
+        sessionSeconds: Math.floor((Date.now() - sessionStart) / 1000),
+      }),
+    );
 
   let pendingAbort: AbortController | null = null;
 
@@ -213,6 +226,7 @@ async function main(): Promise<void> {
         messages,
         signal: pendingAbort.signal,
         onTurn: refreshStatus,
+        showReasoning,
       });
     } catch (e) {
       if ((e as Error).name === "AbortError" || pendingAbort?.signal.aborted) {
@@ -370,6 +384,12 @@ async function main(): Promise<void> {
         toolCtx.yolo = !toolCtx.yolo;
         refreshStatus();
         process.stdout.write(`${DIM}yolo: ${toolCtx.yolo}${RESET}\n`);
+      } else if (cmd === "reasoning") {
+        if (arg === "on") showReasoning = true;
+        else if (arg === "off") showReasoning = false;
+        else showReasoning = !showReasoning; // toggle when no arg
+        refreshStatus();
+        process.stdout.write(`${DIM}reasoning: ${showReasoning ? "on" : "off"}${RESET}\n`);
       } else if (cmd === "audit") {
         process.stdout.write(`${DIM}${audit.auditLogPath()}${RESET}\n`);
       } else {
