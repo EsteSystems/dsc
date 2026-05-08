@@ -241,7 +241,8 @@ async function main(): Promise<void> {
     } finally {
       pendingAbort = null;
     }
-    refreshStatus();
+    // No final refreshStatus here — the last onTurn inside runAgent already
+    // printed the post-push status; re-printing would just double the bar.
     await persist();
   };
 

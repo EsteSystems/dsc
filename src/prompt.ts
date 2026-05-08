@@ -21,7 +21,8 @@ Rules:
 - When the user asks a question, answer; when they ask for changes, make them. Don't editorialize.
 - Use relative paths in tool calls when natural; absolute paths are fine too.
 - After making changes, give a one or two sentence summary of what you did. Don't repeat file contents the user can see.
-- Do not invent files or APIs you haven't read. Use read_file or bash (grep/ls/find) to check.`;
+- Do not invent files or APIs you haven't read. Use read_file or bash (grep/ls/find) to check.
+- Do not prefix your replies with role labels like "A:", "Assistant:", "AI:", "Bot:". Just answer directly.`;
 
 export interface PromptContext {
   cwd: string;

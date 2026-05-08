@@ -115,7 +115,6 @@ export async function runAgent(opts: RunOptions): Promise<void> {
     }
     handlers.flush();
     recordUsage(stats, resp.usage);
-    onTurn?.();
 
     const choice = resp.choices[0];
     const msg = choice.message;
@@ -125,6 +124,7 @@ export async function runAgent(opts: RunOptions): Promise<void> {
     if (msg.reasoning_content) assistantMsg.reasoning_content = msg.reasoning_content;
     if (msg.tool_calls && msg.tool_calls.length) assistantMsg.tool_calls = msg.tool_calls;
     messages.push(assistantMsg);
+    onTurn?.(); // status reflects the just-pushed assistant message
 
     if (!msg.tool_calls || msg.tool_calls.length === 0) {
       return;
@@ -136,7 +136,6 @@ export async function runAgent(opts: RunOptions): Promise<void> {
       process.stdout.write(`${DIM}→ ${name}(${truncate(argsRaw, 200)})${RESET}\n`);
       stats.tool_calls_total += 1;
       stats.tool_calls_by_name[name] = (stats.tool_calls_by_name[name] ?? 0) + 1;
-      onTurn?.();
 
       const toolSpinner = new Spinner(`running ${name}`);
       // Don't spin tools that need approval (interactive prompt).
@@ -153,6 +152,7 @@ export async function runAgent(opts: RunOptions): Promise<void> {
         tool_call_id: call.id,
         content: result.content,
       });
+      onTurn?.(); // status reflects the tool result we just recorded
       const lead = result.content.startsWith("error:") || result.rejected ? RED : DIM;
       process.stdout.write(`${lead}  ${truncate(result.content, 400)}${RESET}\n`);
     }
@@ -184,12 +184,12 @@ export async function runAgent(opts: RunOptions): Promise<void> {
   }
   handlers.flush();
   recordUsage(stats, final.usage);
-  onTurn?.();
   const m = final.choices[0].message;
   const content = m.content ?? "";
   const assistantMsg: Message = { role: "assistant", content };
   if (m.reasoning_content) assistantMsg.reasoning_content = m.reasoning_content;
   messages.push(assistantMsg);
+  onTurn?.();
 }
 
 export function formatCost(stats: Stats, model: Model): string {
