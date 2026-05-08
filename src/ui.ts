@@ -71,41 +71,29 @@ export class Spinner {
   }
 }
 
+/**
+ * Status bar printed as a regular line after each agent turn.
+ *
+ * Simple and safe: no scroll regions, no cursor juggling, no timer.
+ * The status line appears just before the prompt so it's always the
+ * most recent thing before you type.
+ */
 export class StatusBar {
   private text = "";
   private active = false;
-  private resizeHandler = (): void => {
-    if (!this.active) return;
-    const rows = process.stdout.rows ?? 24;
-    if (rows < 4) return;
-    process.stdout.write(`\x1b[1;${rows - 1}r`);
-    this.render(this.text);
-  };
 
   enable(): void {
-    if (this.active) return;
-    if (!process.stdout.isTTY) return;
-    const rows = process.stdout.rows ?? 24;
-    if (rows < 4) return;
-    // Set scroll region to lines 1..rows-1, leaving last row for the status bar.
-    process.stdout.write(`\x1b[1;${rows - 1}r\x1b[${rows - 1};1H`);
     this.active = true;
-    process.stdout.on("resize", this.resizeHandler);
   }
 
   render(text: string): void {
-    this.text = text;
     if (!this.active) return;
-    const rows = process.stdout.rows ?? 24;
-    // Save cursor, jump to bottom row, clear, write, restore cursor.
-    process.stdout.write(`\x1b7\x1b[${rows};1H\x1b[2K${DIM}${text}${RESET}\x1b8`);
+    if (text === this.text) return; // skip duplicate renders
+    this.text = text;
+    process.stdout.write(`\n${DIM}── ${text}${RESET}\n`);
   }
 
   disable(): void {
-    if (!this.active) return;
-    const rows = process.stdout.rows ?? 24;
-    process.stdout.write(`\x1b[r\x1b[${rows};1H\x1b[2K`);
-    process.stdout.removeListener("resize", this.resizeHandler);
     this.active = false;
   }
 }
