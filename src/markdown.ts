@@ -237,12 +237,21 @@ export class MarkdownRenderer {
   private inFence = false;
   private inBlockMath = false;
   private blockMathLines: string[] = [];
+  // Tables are committed to once we see a header followed by a separator.
+  // pendingRow holds a "could-be-table" line we're waiting to disambiguate.
+  // tableBuf holds confirmed table rows once the separator has shown up.
+  private pendingRow: string | null = null;
+  private tableBuf: string[] = [];
 
   push(chunk: string): string {
     let out = "";
     for (const ch of chunk) {
       if (ch === "\n") {
-        out += this.renderLine(this.lineBuf) + "\n";
+        const rendered = this.renderLine(this.lineBuf);
+        // null = the renderer absorbed this line into a multi-line buffer
+        // (table or block-math); don't emit the trailing newline either,
+        // otherwise we'd get a blank line per buffered input line.
+        if (rendered !== null) out += rendered + "\n";
         this.lineBuf = "";
       } else {
         this.lineBuf += ch;
@@ -258,18 +267,37 @@ export class MarkdownRenderer {
       this.inBlockMath = false;
       this.blockMathLines = [];
     }
+    out += this.flushPendingTable();
     if (this.lineBuf) {
-      out += this.renderLine(this.lineBuf);
+      const rendered = this.renderLine(this.lineBuf);
+      if (rendered !== null) out += rendered;
       this.lineBuf = "";
     }
     return out;
   }
 
-  private renderLine(line: string): string {
+  /** Emit any held-back table state. Returns the rendered chunk (with trailing newline if non-empty). */
+  private flushPendingTable(): string {
+    if (this.tableBuf.length > 0) {
+      const out = renderTable(this.tableBuf) + "\n";
+      this.tableBuf = [];
+      this.pendingRow = null;
+      return out;
+    }
+    if (this.pendingRow !== null) {
+      const out = this.renderLeafLine(this.pendingRow) + "\n";
+      this.pendingRow = null;
+      return out;
+    }
+    return "";
+  }
+
+  private renderLine(line: string): string | null {
     // 1. Code fences
     if (/^\s*```/.test(line)) {
+      const prefix = this.flushPendingTable();
       this.inFence = !this.inFence;
-      return DIM + line + RESET;
+      return prefix + DIM + line + RESET;
     }
     if (this.inFence) {
       return CYAN + line + RESET;
@@ -285,50 +313,198 @@ export class MarkdownRenderer {
         this.blockMathLines = [];
         const after = line.slice(closeIdx + 2);
         const block = renderBlockMath(content);
-        return after.trim() ? block + "\n" + this.renderLine(after) : block;
+        if (after.trim()) {
+          const tail = this.renderLine(after);
+          return tail !== null ? block + "\n" + tail : block;
+        }
+        return block;
       }
       this.blockMathLines.push(line);
-      return "";
+      return null; // buffered
     }
 
     // Opening $$ — may be alone or paired on the same line
     const openIdx = line.indexOf("$$");
     if (openIdx !== -1) {
+      const prefix = this.flushPendingTable();
       const before = line.slice(0, openIdx);
       const after = line.slice(openIdx + 2);
       const closeIdx = after.indexOf("$$");
       const parts: string[] = [];
-      if (before.trim()) parts.push(this.renderLine(before));
+      if (prefix) parts.push(prefix.replace(/\n$/, ""));
+      if (before.trim()) {
+        const r = this.renderLine(before);
+        if (r !== null) parts.push(r);
+      }
 
       if (closeIdx !== -1) {
-        // Single-line block math
         parts.push(renderBlockMath(after.slice(0, closeIdx)));
         const rest = after.slice(closeIdx + 2);
-        if (rest.trim()) parts.push(this.renderLine(rest));
+        if (rest.trim()) {
+          const r = this.renderLine(rest);
+          if (r !== null) parts.push(r);
+        }
       } else {
-        // Multi-line block math starts here
         this.inBlockMath = true;
         this.blockMathLines = [after];
       }
-      return parts.join("\n") || "";
+      return parts.length ? parts.join("\n") : null;
     }
 
-    // 3. Inline math $...$
+    // 3. Tables (must come before inline math so $-substitutions don't fire
+    //    inside table cells before we know it IS a table — renderTable
+    //    handles inline rendering of cell contents itself).
+    if (isTableRow(line)) {
+      if (this.tableBuf.length > 0) {
+        this.tableBuf.push(line);
+        return null;
+      }
+      if (this.pendingRow !== null) {
+        if (isTableSeparator(line)) {
+          this.tableBuf.push(this.pendingRow, line);
+          this.pendingRow = null;
+          return null;
+        }
+        // Two consecutive row-shaped lines but the second isn't a separator —
+        // not a table. Emit both as ordinary lines.
+        const a = this.renderLeafLine(this.pendingRow);
+        const b = this.renderLeafLine(line);
+        this.pendingRow = null;
+        return a + "\n" + b;
+      }
+      this.pendingRow = line;
+      return null;
+    }
+    // Non-row line — flush any pending table state before rendering it.
+    const tablePrefix = this.flushPendingTable();
+
+    // 4. Horizontal rule — three or more -, *, or _ on a line by themselves.
+    //    Bullet check below requires `\s+` after the marker, so `---` doesn't
+    //    accidentally match as a bullet.
+    if (/^\s*[-*_]{3,}\s*$/.test(line)) {
+      const cols = process.stdout.columns ?? 80;
+      const width = Math.max(8, Math.min(cols - 2, 80));
+      return tablePrefix + DIM + "─".repeat(width) + RESET;
+    }
+
+    // 5. Inline math $...$
     line = replaceInlineMath(line);
 
-    // 4. Headings
+    // 6. Heading / bullet / inline (the "leaf" formats)
+    return tablePrefix + this.renderLeafLine(line);
+  }
+
+  private renderLeafLine(line: string): string {
     if (/^#{1,6}\s+\S/.test(line)) {
       return BOLD + MAGENTA + line + RESET;
     }
-
-    // 5. Bullet list markers
     const bulletMatch = line.match(/^(\s*)[-*]\s+(.*)$/);
     if (bulletMatch) {
       return `${bulletMatch[1]}${DIM}•${RESET} ${inline(bulletMatch[2])}`;
     }
-
     return inline(line);
   }
+}
+
+// ─── Tables ──────────────────────────────────────────────────────────────────
+
+function isTableRow(line: string): boolean {
+  const t = line.trim();
+  if (!t.startsWith("|") || !t.endsWith("|")) return false;
+  // Need at least one inner pipe (so at least one cell boundary).
+  return (t.match(/\|/g) ?? []).length >= 2;
+}
+
+function isTableSeparator(line: string): boolean {
+  const t = line.trim();
+  if (!t.startsWith("|") || !t.endsWith("|")) return false;
+  const inner = t.slice(1, -1);
+  // Each inner cell is only -, :, or whitespace, with at least one - per cell.
+  return inner.split("|").every((c) => /^\s*:?-{2,}:?\s*$/.test(c));
+}
+
+type Align = "left" | "right" | "center";
+
+function parseRow(row: string): string[] {
+  let r = row.trim();
+  if (r.startsWith("|")) r = r.slice(1);
+  if (r.endsWith("|")) r = r.slice(0, -1);
+  return r.split("|").map((c) => c.trim());
+}
+
+function alignmentsFromSeparator(sep: string): Align[] {
+  return parseRow(sep).map((cell) => {
+    const left = cell.startsWith(":");
+    const right = cell.endsWith(":");
+    if (left && right) return "center";
+    if (right) return "right";
+    return "left";
+  });
+}
+
+function pad(text: string, width: number, align: Align): string {
+  // visualLength strips ANSI sequences before measuring so cells with bold/
+  // inline-code escapes still align properly.
+  const visible = visualLength(text);
+  if (visible >= width) return text;
+  const space = width - visible;
+  if (align === "right") return " ".repeat(space) + text;
+  if (align === "center") {
+    const l = Math.floor(space / 2);
+    return " ".repeat(l) + text + " ".repeat(space - l);
+  }
+  return text + " ".repeat(space);
+}
+
+function visualLength(s: string): number {
+  // Strip ANSI CSI escapes (\x1b[...m), then return code-point count.
+  return [...s.replace(/\x1b\[[0-9;]*m/g, "")].length;
+}
+
+function renderTable(rows: string[]): string {
+  if (rows.length < 2) return rows.join("\n");
+  const header = parseRow(rows[0]);
+  const separator = rows[1];
+  const data = rows.slice(2).map(parseRow);
+  const aligns = alignmentsFromSeparator(separator);
+  const ncols = header.length;
+
+  // Pre-render every cell through inline() so backticks/bold inside cells
+  // get colored. Then compute widths from the visible (ANSI-stripped) length.
+  const renderedHeader = header.map((c) => inline(c));
+  const renderedData = data.map((r) =>
+    Array.from({ length: ncols }, (_, i) => inline(r[i] ?? "")),
+  );
+  const widths = new Array<number>(ncols).fill(0);
+  const considerRow = (cells: string[]) => {
+    for (let i = 0; i < ncols; i++) {
+      const w = visualLength(cells[i] ?? "");
+      if (w > widths[i]) widths[i] = w;
+    }
+  };
+  considerRow(renderedHeader);
+  for (const r of renderedData) considerRow(r);
+
+  const gap = "  "; // two spaces between columns
+  const lines: string[] = [];
+
+  // Header (bold)
+  lines.push(
+    renderedHeader
+      .map((c, i) => pad(BOLD + c + RESET, widths[i], aligns[i] ?? "left"))
+      .join(gap),
+  );
+  // Separator (dim ─ matching widths)
+  lines.push(
+    DIM + widths.map((w) => "─".repeat(Math.max(1, w))).join(gap) + RESET,
+  );
+  // Data rows
+  for (const r of renderedData) {
+    lines.push(
+      r.map((c, i) => pad(c, widths[i], aligns[i] ?? "left")).join(gap),
+    );
+  }
+  return lines.join("\n");
 }
 
 /** Replace $...$ pairs with dimmed Unicode math. */
