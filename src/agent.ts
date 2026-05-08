@@ -14,28 +14,48 @@ export const MAX_TOOL_DEPTH = 8;
 
 const DIM = "\x1b[2m";
 const BOLD = "\x1b[1m";
+const ITALIC = "\x1b[3m";
 const RED = "\x1b[31m";
 const RESET = "\x1b[0m";
 
 function streamHandlers(spinner: Spinner) {
-  let started = false;
+  let contentStarted = false;
+  let reasoningStarted = false;
   const renderer = new MarkdownRenderer();
+
   return {
     onContent: (text: string) => {
-      if (!started) {
+      spinner.bump();
+      if (!contentStarted) {
         spinner.stop();
+        if (reasoningStarted) {
+          // Close the reasoning block (reset styling, blank line) before the answer.
+          process.stdout.write(`${RESET}\n\n`);
+        }
         process.stdout.write(`${BOLD}assistant${RESET}: `);
-        started = true;
+        contentStarted = true;
       }
       process.stdout.write(renderer.push(text));
     },
+    onReasoning: (text: string) => {
+      spinner.bump();
+      if (contentStarted) return; // ignore stray reasoning after content has started
+      if (!reasoningStarted) {
+        spinner.stop();
+        process.stdout.write(`${DIM}reasoning${RESET}\n${DIM}${ITALIC}  `);
+        reasoningStarted = true;
+      }
+      // Indent every newline within the chunk so multi-line reasoning aligns.
+      process.stdout.write(text.replace(/\n/g, "\n  "));
+    },
     flush: () => {
-      if (started) {
+      if (contentStarted) {
         process.stdout.write(renderer.flush());
         process.stdout.write("\n");
+      } else if (reasoningStarted) {
+        process.stdout.write(`${RESET}\n`);
       }
     },
-    started: () => started,
   };
 }
 
@@ -64,6 +84,7 @@ export async function runAgent(opts: RunOptions): Promise<void> {
         tools: TOOL_SCHEMAS,
         signal,
         onContent: handlers.onContent,
+        onReasoning: handlers.onReasoning,
       });
     } finally {
       spinner.stop();
@@ -132,6 +153,7 @@ export async function runAgent(opts: RunOptions): Promise<void> {
       tools: undefined,
       signal,
       onContent: handlers.onContent,
+      onReasoning: handlers.onReasoning,
     });
   } finally {
     spinner.stop();
