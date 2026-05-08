@@ -14,6 +14,8 @@ import { SYSTEM_PROMPT } from "./prompt.js";
 import type { ToolContext } from "./tools.js";
 import * as history from "./history.js";
 import * as approval from "./approval.js";
+import * as replHistory from "./repl_history.js";
+import * as audit from "./audit.js";
 import { StatusBar } from "./ui.js";
 
 const RESET = "\x1b[0m";
@@ -95,7 +97,13 @@ REPL commands:
   /yolo          Toggle approval mode
   /list          List sessions in this cwd
   /resume <#>    Resume a session by index from /list (or 'last')
+  /audit         Print where the JSONL audit log lives
   /exit          Quit
+
+Audit log:
+  Every tool call (bash, edits, reads, fetches, rejections) is recorded
+  as one JSON line at ${audit.auditLogPath()}.
+  Disable with DSC_NO_AUDIT=1.
 `);
 }
 
@@ -159,6 +167,7 @@ async function main(): Promise<void> {
     cwd,
     yolo: cli.yolo,
     filesTouched: stats.files_touched,
+    sessionId: session.id,
   };
 
   const persist = async () => {
@@ -257,8 +266,15 @@ async function main(): Promise<void> {
     process.stdout.write(`\n${DIM}(press Ctrl+C again within 1s to exit)${RESET}\n`);
   });
 
-  const rl = readline.createInterface({ input, output });
+  const rl = readline.createInterface({ input, output, historySize: 1000 });
   approval.setAsker((q) => rl.question(q));
+
+  // Seed up/down history from disk (newest first per readline's convention).
+  void replHistory.compact();
+  const past = await replHistory.load();
+  const rlAny = rl as unknown as { history: string[] };
+  rlAny.history.length = 0;
+  rlAny.history.push(...past.slice().reverse());
 
   while (true) {
     let line: string;
@@ -269,6 +285,10 @@ async function main(): Promise<void> {
     }
     const trimmed = line.trim();
     if (!trimmed) continue;
+
+    // Persist the user's submitted line to the on-disk history file. Slash
+    // commands are recorded too — recalling "/resume 3" is useful.
+    void replHistory.append(trimmed);
 
     if (trimmed.startsWith("/")) {
       const [cmd, ...rest] = trimmed.slice(1).split(/\s+/);
@@ -284,6 +304,7 @@ async function main(): Promise<void> {
         messages = session.messages;
         stats = session.stats;
         toolCtx.filesTouched = stats.files_touched;
+        toolCtx.sessionId = session.id;
         refreshStatus();
         process.stdout.write(`${DIM}new session started (${session.id})${RESET}\n`);
       } else if (cmd === "list") {
@@ -325,6 +346,7 @@ async function main(): Promise<void> {
               stats = session.stats;
               model = session.model;
               toolCtx.filesTouched = stats.files_touched;
+              toolCtx.sessionId = session.id;
               refreshStatus();
               const userTurns = messages.filter((m) => m.role === "user").length;
               process.stdout.write(`${DIM}resumed ${session.id} (${userTurns} turns, model ${model})${RESET}\n`);
@@ -348,13 +370,23 @@ async function main(): Promise<void> {
         toolCtx.yolo = !toolCtx.yolo;
         refreshStatus();
         process.stdout.write(`${DIM}yolo: ${toolCtx.yolo}${RESET}\n`);
+      } else if (cmd === "audit") {
+        process.stdout.write(`${DIM}${audit.auditLogPath()}${RESET}\n`);
       } else {
         process.stdout.write(`${RED}unknown command: /${cmd}${RESET}\n`);
       }
       continue;
     }
 
-    await runTurn(trimmed);
+    // Snapshot rl.history so approval y/N answers (which readline auto-adds)
+    // don't leak into up-arrow recall.
+    const histSnapshot = rlAny.history.slice();
+    try {
+      await runTurn(trimmed);
+    } finally {
+      rlAny.history.length = 0;
+      rlAny.history.push(...histSnapshot);
+    }
   }
   approval.setAsker(null);
   rl.close();

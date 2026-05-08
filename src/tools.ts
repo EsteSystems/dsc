@@ -3,6 +3,7 @@ import { spawn, spawnSync } from "node:child_process";
 import * as path from "node:path";
 import type { ToolSchema } from "./api.js";
 import { confirmBash, confirmEdit, confirmFetch, confirmWrite } from "./approval.js";
+import * as audit from "./audit.js";
 
 export const READ_ONLY_TOOLS = new Set(["read_file", "grep", "glob"]);
 
@@ -137,11 +138,13 @@ export interface ToolContext {
   cwd: string;
   yolo: boolean;
   filesTouched: Set<string>;
+  sessionId: string;
 }
 
 export interface ToolResult {
   content: string;
   rejected?: boolean;
+  audit?: Record<string, unknown>;
 }
 
 function resolvePath(ctx: ToolContext, p: string): string {
@@ -173,27 +176,52 @@ export async function executeTool(
   try {
     args = JSON.parse(argsJson || "{}");
   } catch {
-    return { content: `error: invalid arguments JSON: ${argsJson.slice(0, 200)}` };
+    const result: ToolResult = {
+      content: `error: invalid arguments JSON: ${argsJson.slice(0, 200)}`,
+      audit: { error: "invalid_arguments_json" },
+    };
+    void writeAudit(name, ctx, result);
+    return result;
   }
 
+  let result: ToolResult;
   switch (name) {
     case "read_file":
-      return readFile(args, ctx);
+      result = await readFile(args, ctx);
+      break;
     case "write_file":
-      return writeFile(args, ctx);
+      result = await writeFile(args, ctx);
+      break;
     case "edit_file":
-      return editFile(args, ctx);
+      result = await editFile(args, ctx);
+      break;
     case "bash":
-      return runBash(args, ctx, signal);
+      result = await runBash(args, ctx, signal);
+      break;
     case "grep":
-      return runGrep(args, ctx, signal);
+      result = await runGrep(args, ctx, signal);
+      break;
     case "glob":
-      return runGlob(args, ctx);
+      result = await runGlob(args, ctx);
+      break;
     case "web_fetch":
-      return runWebFetch(args, ctx, signal);
+      result = await runWebFetch(args, ctx, signal);
+      break;
     default:
-      return { content: `error: unknown tool '${name}'` };
+      result = { content: `error: unknown tool '${name}'`, audit: { error: "unknown_tool" } };
   }
+  void writeAudit(name, ctx, result);
+  return result;
+}
+
+function writeAudit(name: string, ctx: ToolContext, result: ToolResult): Promise<void> {
+  return audit.record({
+    session: ctx.sessionId,
+    cwd: ctx.cwd,
+    tool: name,
+    approved: !result.rejected,
+    ...(result.audit ?? {}),
+  });
 }
 
 const READ_DEFAULT_LIMIT = 2000;
@@ -201,14 +229,16 @@ const READ_MAX_LINE_LEN = 2000;
 
 async function readFile(args: Record<string, unknown>, ctx: ToolContext): Promise<ToolResult> {
   const p = String(args.path ?? "");
-  if (!p) return { content: "error: missing 'path'" };
+  if (!p) return { content: "error: missing 'path'", audit: { error: "missing_path" } };
   const abs = resolvePath(ctx, p);
-  if (!(await exists(abs))) return { content: `error: file does not exist: ${abs}` };
+  if (!(await exists(abs))) {
+    return { content: `error: file does not exist: ${abs}`, audit: { path: abs, error: "missing" } };
+  }
   let text: string;
   try {
     text = await fs.readFile(abs, "utf8");
   } catch (e: unknown) {
-    return { content: `error: ${(e as Error).message}` };
+    return { content: `error: ${(e as Error).message}`, audit: { path: abs, error: "read_failed" } };
   }
   const offset = Number(args.offset) > 0 ? Math.floor(Number(args.offset)) : 1;
   const limitProvided = Number(args.limit) > 0;
@@ -224,13 +254,16 @@ async function readFile(args: Record<string, unknown>, ctx: ToolContext): Promis
   if (end < totalLines) {
     body += `\n…(showing lines ${offset}–${end} of ${totalLines}; pass offset/limit to read more)`;
   }
-  return { content: body };
+  return {
+    content: body,
+    audit: { path: abs, lines_returned: end - start, total_lines: totalLines },
+  };
 }
 
 async function writeFile(args: Record<string, unknown>, ctx: ToolContext): Promise<ToolResult> {
   const p = String(args.path ?? "");
   const content = String(args.content ?? "");
-  if (!p) return { content: "error: missing 'path'" };
+  if (!p) return { content: "error: missing 'path'", audit: { error: "missing_path" } };
   const abs = resolvePath(ctx, p);
   const existed = await exists(abs);
   let oldContent = "";
@@ -243,12 +276,21 @@ async function writeFile(args: Record<string, unknown>, ctx: ToolContext): Promi
   }
   if (!ctx.yolo) {
     const ok = await confirmWrite(abs, oldContent, content, existed);
-    if (!ok) return { content: "rejected by user", rejected: true };
+    if (!ok) {
+      return {
+        content: "rejected by user",
+        rejected: true,
+        audit: { path: abs, size: content.length, existed },
+      };
+    }
   }
   await fs.mkdir(path.dirname(abs), { recursive: true });
   await fs.writeFile(abs, content, "utf8");
   ctx.filesTouched.add(abs);
-  return { content: `ok: ${existed ? "overwrote" : "created"} ${abs} (${content.length} chars)` };
+  return {
+    content: `ok: ${existed ? "overwrote" : "created"} ${abs} (${content.length} chars)`,
+    audit: { path: abs, size: content.length, existed },
+  };
 }
 
 async function editFile(args: Record<string, unknown>, ctx: ToolContext): Promise<ToolResult> {
@@ -256,24 +298,32 @@ async function editFile(args: Record<string, unknown>, ctx: ToolContext): Promis
   const oldString = String(args.old_string ?? "");
   const newString = String(args.new_string ?? "");
   const replaceAll = Boolean(args.replace_all);
-  if (!p) return { content: "error: missing 'path'" };
-  if (oldString === "") return { content: "error: old_string must not be empty" };
+  if (!p) return { content: "error: missing 'path'", audit: { error: "missing_path" } };
+  if (oldString === "") {
+    return { content: "error: old_string must not be empty", audit: { path: p, error: "empty_old_string" } };
+  }
 
   const abs = resolvePath(ctx, p);
-  if (!(await exists(abs))) return { content: `error: file does not exist: ${abs}` };
+  if (!(await exists(abs))) {
+    return { content: `error: file does not exist: ${abs}`, audit: { path: abs, error: "missing" } };
+  }
   let current: string;
   try {
     current = await fs.readFile(abs, "utf8");
   } catch (e: unknown) {
-    return { content: `error: ${(e as Error).message}` };
+    return { content: `error: ${(e as Error).message}`, audit: { path: abs, error: "read_failed" } };
   }
   const occurrences = current.split(oldString).length - 1;
   if (occurrences === 0) {
-    return { content: `error: old_string not found in ${abs}` };
+    return {
+      content: `error: old_string not found in ${abs}`,
+      audit: { path: abs, error: "not_found" },
+    };
   }
   if (occurrences > 1 && !replaceAll) {
     return {
       content: `error: old_string is not unique in ${abs} (matches ${occurrences} times). Pass replace_all=true or include more surrounding context.`,
+      audit: { path: abs, error: "not_unique", occurrences },
     };
   }
   const updated = replaceAll
@@ -282,12 +332,19 @@ async function editFile(args: Record<string, unknown>, ctx: ToolContext): Promis
 
   if (!ctx.yolo) {
     const ok = await confirmEdit(abs, current, updated);
-    if (!ok) return { content: "rejected by user", rejected: true };
+    if (!ok) {
+      return {
+        content: "rejected by user",
+        rejected: true,
+        audit: { path: abs, replacements: occurrences },
+      };
+    }
   }
   await fs.writeFile(abs, updated, "utf8");
   ctx.filesTouched.add(abs);
   return {
     content: `ok: edited ${abs} (${occurrences} replacement${occurrences === 1 ? "" : "s"})`,
+    audit: { path: abs, replacements: occurrences },
   };
 }
 
@@ -297,11 +354,17 @@ async function runBash(
   signal?: AbortSignal,
 ): Promise<ToolResult> {
   const command = String(args.command ?? "");
-  if (!command) return { content: "error: missing 'command'" };
+  if (!command) return { content: "error: missing 'command'", audit: { error: "missing_command" } };
   const timeoutMs = Number(args.timeout_ms) > 0 ? Math.floor(Number(args.timeout_ms)) : 60_000;
   if (!ctx.yolo) {
     const ok = await confirmBash(command, String(args.description ?? ""));
-    if (!ok) return { content: "rejected by user", rejected: true };
+    if (!ok) {
+      return {
+        content: "rejected by user",
+        rejected: true,
+        audit: { command, timeout_ms: timeoutMs },
+      };
+    }
   }
   return new Promise<ToolResult>((resolve) => {
     const child = spawn("/bin/sh", ["-c", command], { cwd: ctx.cwd });
@@ -338,12 +401,20 @@ async function runBash(
       if (stdout) parts.push(`stdout:\n${trim(stdout)}`);
       if (stderr) parts.push(`stderr:\n${trim(stderr)}`);
       if (!stdout && !stderr) parts.push("(no output)");
-      resolve({ content: parts.join("\n") });
+      resolve({
+        content: parts.join("\n"),
+        audit: {
+          command,
+          exit: interrupted ? "interrupted" : timedOut ? "timeout" : (code ?? null),
+          stdout_bytes: stdout.length,
+          stderr_bytes: stderr.length,
+        },
+      });
     });
     child.on("error", (e) => {
       clearTimeout(timer);
       signal?.removeEventListener("abort", onAbort);
-      resolve({ content: `error: ${e.message}` });
+      resolve({ content: `error: ${e.message}`, audit: { command, error: "spawn_failed" } });
     });
   });
 }
@@ -405,21 +476,30 @@ async function runGrep(
     child.stderr.on("data", (d) => (stderr += d.toString()));
     child.on("close", (code) => {
       signal?.removeEventListener("abort", onAbort);
-      if (interrupted) return resolve({ content: "interrupted" });
+      const auditBase = { pattern, path: searchPath, glob, case_insensitive: ci, engine: cmd };
+      if (interrupted) {
+        return resolve({ content: "interrupted", audit: { ...auditBase, exit: "interrupted" } });
+      }
       // grep/rg exit 1 when no matches — treat as a clean "no matches" result.
-      if (code === 1 && !stdout) return resolve({ content: "(no matches)" });
+      if (code === 1 && !stdout) {
+        return resolve({ content: "(no matches)", audit: { ...auditBase, matches: 0 } });
+      }
       if (code !== 0 && code !== null && !stdout) {
-        return resolve({ content: `error: ${cmd} exited ${code}${stderr ? `: ${stderr.trim()}` : ""}` });
+        return resolve({
+          content: `error: ${cmd} exited ${code}${stderr ? `: ${stderr.trim()}` : ""}`,
+          audit: { ...auditBase, error: `exit_${code}` },
+        });
       }
       let out = stdout.trim();
+      const matches = out ? out.split("\n").length : 0;
       if (out.length > GREP_MAX_OUTPUT) {
         out = out.slice(0, GREP_MAX_OUTPUT) + `\n…(truncated; narrow the search with path or glob)`;
       }
-      resolve({ content: out || "(no matches)" });
+      resolve({ content: out || "(no matches)", audit: { ...auditBase, matches } });
     });
     child.on("error", (e) => {
       signal?.removeEventListener("abort", onAbort);
-      resolve({ content: `error: ${e.message}` });
+      resolve({ content: `error: ${e.message}`, audit: { pattern, error: "spawn_failed" } });
     });
   });
 }
@@ -428,27 +508,32 @@ const GLOB_LIMIT = 500;
 
 async function runGlob(args: Record<string, unknown>, ctx: ToolContext): Promise<ToolResult> {
   const pattern = String(args.pattern ?? "");
-  if (!pattern) return { content: "error: missing 'pattern'" };
+  if (!pattern) return { content: "error: missing 'pattern'", audit: { error: "missing_pattern" } };
   const cwd = args.path ? resolvePath(ctx, String(args.path)) : ctx.cwd;
   const matches: string[] = [];
   try {
     // fs.promises.glob is available in Node 22+.
     const fsAny = fs as unknown as { glob: (p: string, o: { cwd: string }) => AsyncIterable<string> };
     if (typeof fsAny.glob !== "function") {
-      return { content: "error: fs.glob unavailable; need Node 22+. Use bash with `find` instead." };
+      return {
+        content: "error: fs.glob unavailable; need Node 22+. Use bash with `find` instead.",
+        audit: { error: "fs_glob_unavailable" },
+      };
     }
     for await (const p of fsAny.glob(pattern, { cwd })) {
       matches.push(p);
       if (matches.length >= GLOB_LIMIT) break;
     }
   } catch (e) {
-    return { content: `error: ${(e as Error).message}` };
+    return { content: `error: ${(e as Error).message}`, audit: { pattern, base: cwd, error: "glob_failed" } };
   }
-  if (!matches.length) return { content: "(no matches)" };
+  if (!matches.length) {
+    return { content: "(no matches)", audit: { pattern, base: cwd, matches: 0 } };
+  }
   matches.sort();
   let out = matches.join("\n");
   if (matches.length === GLOB_LIMIT) out += `\n…(reached ${GLOB_LIMIT}-path cap; narrow the pattern)`;
-  return { content: out };
+  return { content: out, audit: { pattern, base: cwd, matches: matches.length } };
 }
 
 const FETCH_MAX = 50_000;
@@ -459,13 +544,13 @@ async function runWebFetch(
   signal?: AbortSignal,
 ): Promise<ToolResult> {
   const url = String(args.url ?? "");
-  if (!url) return { content: "error: missing 'url'" };
+  if (!url) return { content: "error: missing 'url'", audit: { error: "missing_url" } };
   if (!/^https?:\/\//i.test(url)) {
-    return { content: "error: url must start with http:// or https://" };
+    return { content: "error: url must start with http:// or https://", audit: { url, error: "bad_scheme" } };
   }
   if (!ctx.yolo) {
     const ok = await confirmFetch(url);
-    if (!ok) return { content: "rejected by user", rejected: true };
+    if (!ok) return { content: "rejected by user", rejected: true, audit: { url } };
   }
   let res: Response;
   try {
@@ -475,24 +560,33 @@ async function runWebFetch(
       redirect: "follow",
     });
   } catch (e) {
-    if ((e as Error).name === "AbortError") return { content: "interrupted" };
-    return { content: `error: ${(e as Error).message}` };
+    if ((e as Error).name === "AbortError") {
+      return { content: "interrupted", audit: { url, error: "interrupted" } };
+    }
+    return { content: `error: ${(e as Error).message}`, audit: { url, error: "fetch_failed" } };
   }
   if (!res.ok) {
-    return { content: `error: HTTP ${res.status} ${res.statusText}` };
+    return {
+      content: `error: HTTP ${res.status} ${res.statusText}`,
+      audit: { url, status: res.status },
+    };
   }
   const ct = res.headers.get("content-type") ?? "";
   let text: string;
   try {
     text = await res.text();
   } catch (e) {
-    return { content: `error: ${(e as Error).message}` };
+    return { content: `error: ${(e as Error).message}`, audit: { url, status: res.status, error: "read_failed" } };
   }
+  const rawBytes = text.length;
   if (/html|xml/i.test(ct)) text = stripHtml(text);
   if (text.length > FETCH_MAX) {
     text = text.slice(0, FETCH_MAX) + `\n…(truncated, ${text.length - FETCH_MAX} more chars)`;
   }
-  return { content: text || "(empty body)" };
+  return {
+    content: text || "(empty body)",
+    audit: { url, status: res.status, content_type: ct, bytes: rawBytes },
+  };
 }
 
 function stripHtml(html: string): string {
