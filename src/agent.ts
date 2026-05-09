@@ -11,7 +11,11 @@ import { Spinner } from "./ui.js";
 import { MarkdownRenderer } from "./markdown.js";
 import { buildSystemPrompt } from "./prompt.js";
 
-export const MAX_TOOL_DEPTH = 8;
+// How many tool calls we let the agent chain in one user turn before we stop
+// it. Set high enough that real coding tasks (read several files, search, run
+// tests, write a patch, run tests again, commit) can finish in one turn; low
+// enough to catch runaway loops where the model fails to converge.
+export const MAX_TOOL_DEPTH = 24;
 
 const DIM = "\x1b[2m";
 const BOLD = "\x1b[1m";
@@ -194,37 +198,15 @@ export async function runAgent(opts: RunOptions): Promise<void> {
     }
   }
 
-  // Out of tool-call budget — ask for a final summary without tools.
-  process.stdout.write(`${DIM}(reached MAX_TOOL_DEPTH=${MAX_TOOL_DEPTH}; asking for final summary)${RESET}\n`);
-  messages.push({
-    role: "user",
-    content:
-      "You've used the maximum number of tool calls for this turn. Do not call more tools. Provide a concise final response describing what was done and what (if anything) remains.",
-  });
-  stats.prompts += 1;
-  const spinner = new Spinner("wrapping up");
-  spinner.start();
-  const handlers = streamHandlers(spinner, showReasoning, assistantLabel);
-  let final;
-  try {
-    final = await chatStream({
-      model,
-      messages: buildApi(),
-      tools: undefined,
-      signal,
-      onContent: handlers.onContent,
-      onReasoning: handlers.onReasoning,
-    });
-  } finally {
-    spinner.stop();
-  }
-  handlers.flush();
-  recordUsage(stats, final.usage);
-  const m = final.choices[0].message;
-  const content = m.content ?? "";
-  const assistantMsg: Message = { role: "assistant", content };
-  if (m.reasoning_content) assistantMsg.reasoning_content = m.reasoning_content;
-  messages.push(assistantMsg);
+  // Out of tool-call budget. We used to call the API again with `tools:
+  // undefined` and a "no more tools, summarize" user message — but the model
+  // routinely ignored that and emitted raw tool-call markup as plain text,
+  // which printed verbatim and looked broken. Better to stop cleanly here:
+  // the conversation history is consistent, the user can ask "continue" if
+  // they want to give it another budget.
+  process.stdout.write(
+    `${DIM}(reached MAX_TOOL_DEPTH=${MAX_TOOL_DEPTH}; stopping. Send 'continue' if you want to give the agent another budget.)${RESET}\n`,
+  );
   onTurn?.();
 }
 
