@@ -92,7 +92,7 @@ export async function runAgent(opts: RunOptions): Promise<void> {
         statusLine: opts.getStatusLine?.(),
       }),
     },
-    ...conversationMessages(),
+    ...repairToolCallPairing(conversationMessages()),
   ];
 
   for (let depth = 0; depth < MAX_TOOL_DEPTH; depth++) {
@@ -130,7 +130,9 @@ export async function runAgent(opts: RunOptions): Promise<void> {
       return;
     }
 
-    for (const call of msg.tool_calls) {
+    const toolCalls = msg.tool_calls;
+    for (let i = 0; i < toolCalls.length; i++) {
+      const call = toolCalls[i];
       const name = call.function.name;
       const argsRaw = call.function.arguments ?? "{}";
       process.stdout.write(`${DIM}→ ${name}(${truncate(argsRaw, 200)})${RESET}\n`);
@@ -141,9 +143,23 @@ export async function runAgent(opts: RunOptions): Promise<void> {
       // Don't spin tools that need approval (interactive prompt).
       const interactive = !READ_ONLY_TOOLS.has(name) && !toolCtx.yolo;
       if (!interactive) toolSpinner.start();
-      let result;
+      let result: { content: string; rejected?: boolean };
+      let throwAfter: unknown = null;
       try {
         result = await executeTool(name, argsRaw, toolCtx, signal);
+      } catch (e) {
+        // Convert the throw into a synthetic tool result so the assistant's
+        // tool_call gets a corresponding tool message — without that, the
+        // next API call 400s with "tool_calls must be followed by tool
+        // messages". The original error is re-thrown after we record it.
+        throwAfter = e;
+        const isAbort =
+          e instanceof Error &&
+          (e.name === "AbortError" || (e as { code?: string }).code === "ABORT_ERR");
+        result = {
+          content: isAbort ? "interrupted" : `error: ${(e as Error).message ?? "tool failed"}`,
+          rejected: isAbort,
+        };
       } finally {
         toolSpinner.stop();
       }
@@ -155,6 +171,19 @@ export async function runAgent(opts: RunOptions): Promise<void> {
       onTurn?.(); // status reflects the tool result we just recorded
       const lead = result.content.startsWith("error:") || result.rejected ? RED : DIM;
       process.stdout.write(`${lead}  ${truncate(result.content, 400)}${RESET}\n`);
+
+      if (throwAfter) {
+        // Stub-fill any remaining tool_calls before propagating, otherwise
+        // the persisted history will still 400 on the next turn.
+        for (let j = i + 1; j < toolCalls.length; j++) {
+          messages.push({
+            role: "tool",
+            tool_call_id: toolCalls[j].id,
+            content: "skipped: previous tool was interrupted",
+          });
+        }
+        throw throwAfter;
+      }
     }
   }
 
@@ -241,4 +270,43 @@ function formatDuration(s: number): string {
 
 function truncate(s: string, n: number): string {
   return s.length <= n ? s : s.slice(0, n) + "…";
+}
+
+/**
+ * Synthesize stub tool messages for any assistant.tool_calls that don't have
+ * a corresponding tool response further in the message list.
+ *
+ * Without this, a session that was previously interrupted after the assistant
+ * called a tool (but before the tool message landed) will keep 400-ing on
+ * every subsequent turn: the API enforces "an assistant message with
+ * 'tool_calls' must be followed by tool messages responding to each
+ * 'tool_call_id'". This recovers transparently per call.
+ */
+function repairToolCallPairing(messages: Message[]): Message[] {
+  const out: Message[] = [];
+  for (let i = 0; i < messages.length; i++) {
+    const m = messages[i];
+    out.push(m);
+    if (m.role !== "assistant" || !m.tool_calls || !m.tool_calls.length) continue;
+
+    const seen = new Set<string>();
+    let j = i + 1;
+    while (j < messages.length && messages[j].role === "tool") {
+      out.push(messages[j]);
+      const id = messages[j].tool_call_id;
+      if (id) seen.add(id);
+      j++;
+    }
+    for (const tc of m.tool_calls) {
+      if (!seen.has(tc.id)) {
+        out.push({
+          role: "tool",
+          tool_call_id: tc.id,
+          content: "(no response — recovered from interrupted turn)",
+        });
+      }
+    }
+    i = j - 1; // skip the tool messages we already consumed
+  }
+  return out;
 }
