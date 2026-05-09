@@ -2,6 +2,7 @@ import * as readline from "node:readline/promises";
 import { stdin as input, stdout as output } from "node:process";
 import { spawnSync } from "node:child_process";
 import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { promises as fsp } from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import {
@@ -104,8 +105,13 @@ REPL commands:
                  Show or hide reasoning_content streamed by thinking models
                  (toggle when no arg)
   /list          List sessions in this cwd
-  /resume <#>    Resume a session by index from /list (or 'last')
-  /audit         Print where the JSONL audit log lives
+  /save <name>   Give the current session a friendly name (used by /resume
+                 and shown in /list).
+  /resume <ref>  Resume a session by index from /list, by /save'd name,
+                 by id, or 'last' for the most recent.
+  /audit [path|show [N]]
+                 Default / 'path': print the JSONL audit log path.
+                 'show [N]': render the last N entries inline (default 10).
   /transcript    Print the full conversation, including any messages that
                  /compact previously archived (kept on disk, not sent to
                  the API).
@@ -340,7 +346,12 @@ async function main(): Promise<void> {
     process.stdout.write(`\n${DIM}(press Ctrl+C again within 1s to exit)${RESET}\n`);
   });
 
-  const rl = readline.createInterface({ input, output, historySize: 1000 });
+  const rl = readline.createInterface({
+    input,
+    output,
+    historySize: 1000,
+    completer: completeSlashCommand,
+  });
   approval.setAsker((q) => rl.question(q));
 
   // Seed up/down history from disk (newest first per readline's convention).
@@ -389,10 +400,22 @@ async function main(): Promise<void> {
           all.forEach((s, i) => {
             const ago = formatRelative(s.updated_at);
             const here = s.id === session.id ? `${BOLD}*${RESET} ` : "  ";
+            const label = s.name ? `${BOLD}${s.name}${RESET} (${s.model})` : s.model;
             process.stdout.write(
-              `${here}${String(i + 1).padStart(2, " ")}. ${s.model}  ${ago}  (${s.message_count} msgs)  ${DIM}${s.first_user_message || "—"}${RESET}\n`,
+              `${here}${String(i + 1).padStart(2, " ")}. ${label}  ${ago}  (${s.message_count} msgs)  ${DIM}${s.first_user_message || "—"}${RESET}\n`,
             );
           });
+        }
+      } else if (cmd === "save") {
+        const name = arg.trim();
+        if (!name) {
+          process.stdout.write(`${RED}usage: /save <name>${RESET}\n`);
+        } else {
+          session.name = name;
+          await persist();
+          process.stdout.write(
+            `${DIM}session saved as "${name}" (id ${session.id})${RESET}\n`,
+          );
         }
       } else if (cmd === "resume") {
         const all = await history.listSessions(cwd);
@@ -407,8 +430,16 @@ async function main(): Promise<void> {
             target = all[idx] ?? null;
             if (!target) process.stdout.write(`${RED}no session at index ${arg} (have ${all.length})${RESET}\n`);
           } else {
-            target = all.find((s) => s.id === arg) ?? null;
-            if (!target) process.stdout.write(`${RED}no session with id ${arg}${RESET}\n`);
+            // Match by name first (most-recent wins on tie since `all` is
+            // sorted desc by updated_at), then fall back to id.
+            target =
+              all.find((s) => s.name === arg) ??
+              all.find((s) => s.id === arg) ??
+              null;
+            if (!target)
+              process.stdout.write(
+                `${RED}no session with name or id ${arg}${RESET}\n`,
+              );
           }
           if (target) {
             const loaded = await history.loadSession(target.id);
@@ -451,7 +482,19 @@ async function main(): Promise<void> {
         refreshStatus();
         process.stdout.write(`${DIM}reasoning: ${showReasoning ? "on" : "off"}${RESET}\n`);
       } else if (cmd === "audit") {
-        process.stdout.write(`${DIM}${audit.auditLogPath()}${RESET}\n`);
+        const sub = arg.trim();
+        if (sub.startsWith("show")) {
+          const nRaw = sub.replace(/^show\s*/, "").trim();
+          const n = nRaw ? parseInt(nRaw, 10) : NaN;
+          const limit = Number.isFinite(n) && n > 0 ? n : 10;
+          await renderAuditEntries(limit);
+        } else if (!sub || sub === "path") {
+          process.stdout.write(`${DIM}${audit.auditLogPath()}${RESET}\n`);
+        } else {
+          process.stdout.write(
+            `${RED}usage: /audit | /audit path | /audit show [N]${RESET}\n`,
+          );
+        }
       } else if (cmd === "transcript") {
         const archived = session.archivedMessages ?? [];
         if (archived.length === 0 && messages.length === 0) {
@@ -580,6 +623,100 @@ async function main(): Promise<void> {
   rl.close();
   statusBar.disable();
   process.stdout.write(`\n${DIM}${formatCost(stats, model)}${RESET}\n`);
+}
+
+async function renderAuditEntries(limit: number): Promise<void> {
+  let text: string;
+  try {
+    text = await fsp.readFile(audit.auditLogPath(), "utf8");
+  } catch {
+    process.stdout.write(`${DIM}(no audit log yet)${RESET}\n`);
+    return;
+  }
+  const lines = text.split("\n").filter((l) => l.length > 0).slice(-limit);
+  if (lines.length === 0) {
+    process.stdout.write(`${DIM}(empty)${RESET}\n`);
+    return;
+  }
+  for (const line of lines) {
+    let entry: Record<string, unknown>;
+    try {
+      entry = JSON.parse(line) as Record<string, unknown>;
+    } catch {
+      continue;
+    }
+    const ts = typeof entry.ts === "string" ? entry.ts.slice(11, 19) : "";
+    const ok =
+      entry.approved === false
+        ? `${RED}✗${RESET}`
+        : entry.error
+          ? `${RED}!${RESET}`
+          : `${DIM}✓${RESET}`;
+    const tool = String(entry.tool ?? "?");
+    const summary = summarizeAuditEntry(entry);
+    process.stdout.write(
+      `${DIM}${ts}${RESET}  ${ok} ${BOLD}${tool.padEnd(11)}${RESET}  ${summary}\n`,
+    );
+  }
+}
+
+function summarizeAuditEntry(e: Record<string, unknown>): string {
+  const trim = (v: unknown, n = 80): string => {
+    const s = typeof v === "string" ? v : "";
+    return s.length <= n ? s : s.slice(0, n) + "…";
+  };
+  switch (e.tool) {
+    case "bash":
+      return trim(e.command, 100);
+    case "write_file":
+    case "edit_file":
+    case "read_file":
+      return trim(e.path);
+    case "grep":
+      return `"${trim(e.pattern, 40)}" in ${trim(e.path, 40)}`;
+    case "glob":
+      return trim(e.pattern);
+    case "web_search":
+      return `"${trim(e.query, 80)}"`;
+    case "web_fetch":
+      return trim(e.url, 100);
+    default:
+      return "";
+  }
+}
+
+// Slash commands the REPL recognizes. Used both for tab completion and as
+// a single source of truth for what's accepted (kept in sync with the if/
+// else chain in main()).
+const SLASH_COMMANDS: ReadonlyArray<string> = [
+  "audit",
+  "clear",
+  "compact",
+  "cost",
+  "edit",
+  "exit",
+  "help",
+  "list",
+  "model",
+  "quit",
+  "reasoning",
+  "resume",
+  "save",
+  "transcript",
+  "yolo",
+];
+
+// readline-style completer: returns [matches, substringMatched]. We complete
+// the slash-command name only; subcommand args (e.g. /resume <name>) are not
+// completed yet — keep it simple and predictable.
+function completeSlashCommand(line: string): [string[], string] {
+  if (!line.startsWith("/")) return [[], line];
+  const partial = line.slice(1);
+  if (partial.includes(" ")) return [[], line]; // past the command word
+  const matches = SLASH_COMMANDS.filter((c) => c.startsWith(partial)).map(
+    (c) => "/" + c,
+  );
+  return [matches, line];
 }
 
 function renderTranscriptMessage(m: Message, archived: boolean): void {

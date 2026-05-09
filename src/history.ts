@@ -28,6 +28,8 @@ export interface SessionMeta {
   updated_at: number;
   message_count: number;
   first_user_message: string;
+  /** User-assigned name (via /save). Optional; resume can use it as an alias. */
+  name?: string;
 }
 
 interface SessionFileV2 {
@@ -43,6 +45,8 @@ interface SessionFileV2 {
   /** Messages that have been summarized away by /compact. Never sent to
    *  the API; preserved on disk so /transcript can show the full history. */
   archivedMessages?: Message[];
+  /** User-assigned name set via /save. */
+  name?: string;
 }
 
 export interface CompactionState {
@@ -70,6 +74,8 @@ export interface SessionState {
   /** Messages that have been summarized away by /compact. Never sent to
    *  the API; preserved so /transcript can render the full history. */
   archivedMessages?: Message[];
+  /** Friendly name set by /save; usable in /resume in addition to id/index. */
+  name?: string;
 }
 
 function newSessionId(): string {
@@ -135,6 +141,7 @@ export async function saveSession(state: SessionState): Promise<void> {
     ...(state.archivedMessages?.length
       ? { archivedMessages: state.archivedMessages }
       : {}),
+    ...(state.name ? { name: state.name } : {}),
   };
   const tmp = file + ".tmp";
   await fs.writeFile(tmp, JSON.stringify(data, null, 2), "utf8");
@@ -166,6 +173,7 @@ export async function loadSession(id: string): Promise<SessionState | null> {
     created_at: data.created_at,
     compaction: data.compaction,
     archivedMessages: data.archivedMessages,
+    name: data.name,
   };
 }
 
@@ -204,6 +212,7 @@ export async function listSessions(cwd?: string): Promise<SessionMeta[]> {
       message_count: data.messages.filter((m) => m.role === "user" || m.role === "assistant").length,
       first_user_message:
         typeof firstUser?.content === "string" ? firstUser.content.slice(0, 80) : "",
+      name: data.name,
     });
   }
   out.sort((a, b) => b.updated_at - a.updated_at);
