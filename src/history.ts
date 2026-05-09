@@ -40,6 +40,9 @@ interface SessionFileV2 {
   messages: Message[];
   stats: Omit<Stats, "files_touched"> & { files_touched: string[] };
   compaction?: CompactionState;
+  /** Messages that have been summarized away by /compact. Never sent to
+   *  the API; preserved on disk so /transcript can show the full history. */
+  archivedMessages?: Message[];
 }
 
 export interface CompactionState {
@@ -64,6 +67,9 @@ export interface SessionState {
   stats: Stats;
   created_at: number;
   compaction?: CompactionState;
+  /** Messages that have been summarized away by /compact. Never sent to
+   *  the API; preserved so /transcript can render the full history. */
+  archivedMessages?: Message[];
 }
 
 function newSessionId(): string {
@@ -126,6 +132,9 @@ export async function saveSession(state: SessionState): Promise<void> {
     messages: state.messages,
     stats: statsToPersisted(state.stats),
     ...(state.compaction ? { compaction: state.compaction } : {}),
+    ...(state.archivedMessages?.length
+      ? { archivedMessages: state.archivedMessages }
+      : {}),
   };
   const tmp = file + ".tmp";
   await fs.writeFile(tmp, JSON.stringify(data, null, 2), "utf8");
@@ -156,6 +165,7 @@ export async function loadSession(id: string): Promise<SessionState | null> {
     stats: statsFromPersisted(data.stats),
     created_at: data.created_at,
     compaction: data.compaction,
+    archivedMessages: data.archivedMessages,
   };
 }
 

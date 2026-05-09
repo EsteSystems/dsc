@@ -106,10 +106,13 @@ REPL commands:
   /list          List sessions in this cwd
   /resume <#>    Resume a session by index from /list (or 'last')
   /audit         Print where the JSONL audit log lives
+  /transcript    Print the full conversation, including any messages that
+                 /compact previously archived (kept on disk, not sent to
+                 the API).
   /compact [N]   Summarize older turns into a synthetic block (kept in the
-                 system prompt) and drop them from the message log.
-                 Keeps the last N user turns verbatim (default N=4).
-                 Cumulative across re-runs.
+                 system prompt) and move them to the archive (visible via
+                 /transcript). Keeps the last N user turns verbatim
+                 (default N=4). Cumulative across re-runs.
   /edit [text]   Compose the next prompt in $EDITOR (good for paste-heavy
                  or multi-line input). Optional initial text seeds the buffer.
   /exit          Quit
@@ -123,6 +126,11 @@ Audit log:
   Every tool call (bash, edits, reads, fetches, rejections) is recorded
   as one JSON line at ${audit.auditLogPath()}.
   Disable with DSC_NO_AUDIT=1.
+
+Auto-compact:
+  When estimated context tokens exceed DSC_AUTO_COMPACT_AT (default 50000;
+  set to 0 / off / false to disable), dsc runs /compact 4 automatically
+  after the current turn. Manual /compact still works regardless.
 `);
 }
 
@@ -138,6 +146,18 @@ async function main(): Promise<void> {
     printHelp();
     return;
   }
+
+  // Auto-compact threshold (token-count of estimated context). Set to 0 to
+  // disable. Default 50K — well below the 1M model limit, but tuned to keep
+  // per-turn input cost from creeping. Override via DSC_AUTO_COMPACT_AT.
+  const AUTO_COMPACT_AT_TOKENS = (() => {
+    const raw = process.env.DSC_AUTO_COMPACT_AT;
+    if (!raw) return 50_000;
+    if (raw === "0" || raw === "off" || raw === "false") return 0;
+    const n = parseInt(raw, 10);
+    return Number.isFinite(n) && n > 0 ? n : 50_000;
+  })();
+  const AUTO_COMPACT_KEEP = 4;
 
   if (!hasApiKey()) {
     process.stderr.write(`${RED}No DeepSeek API key found.${RESET}\n`);
@@ -189,15 +209,31 @@ async function main(): Promise<void> {
     sessionId: session.id,
   };
 
-  const persist = async () => {
-    try {
-      session.model = model;
-      session.messages = messages;
-      session.stats = stats;
-      await history.saveSession(session);
-    } catch (e) {
-      process.stderr.write(`${DIM}(history save failed: ${(e as Error).message})${RESET}\n`);
-    }
+  // Single-in-flight, coalescing save. Multiple persist() calls during one
+  // save's RTT collapse into one re-save at the end with the latest state.
+  // Awaiting persist() returns when *all* queued state is on disk.
+  let savePromise: Promise<void> | null = null;
+  let savePending = false;
+  const persist = (): Promise<void> => {
+    savePending = true;
+    if (savePromise) return savePromise;
+    savePromise = (async () => {
+      while (savePending) {
+        savePending = false;
+        try {
+          session.model = model;
+          session.messages = messages;
+          session.stats = stats;
+          await history.saveSession(session);
+        } catch (e) {
+          process.stderr.write(
+            `${DIM}(history save failed: ${(e as Error).message})${RESET}\n`,
+          );
+        }
+      }
+      savePromise = null;
+    })();
+    return savePromise;
   };
 
   const statusBar = new StatusBar();
@@ -241,7 +277,12 @@ async function main(): Promise<void> {
         toolCtx,
         messages,
         signal: pendingAbort.signal,
-        onTurn: refreshStatus,
+        onTurn: () => {
+          refreshStatus();
+          // Make every committed message durable. Coalesces if a save is in
+          // flight, so back-to-back tool turns don't queue N saves.
+          void persist();
+        },
         showReasoning,
         getStatusLine: currentStatusLine,
         getSummary: () => session.compaction?.summary,
@@ -411,61 +452,26 @@ async function main(): Promise<void> {
         process.stdout.write(`${DIM}reasoning: ${showReasoning ? "on" : "off"}${RESET}\n`);
       } else if (cmd === "audit") {
         process.stdout.write(`${DIM}${audit.auditLogPath()}${RESET}\n`);
+      } else if (cmd === "transcript") {
+        const archived = session.archivedMessages ?? [];
+        if (archived.length === 0 && messages.length === 0) {
+          process.stdout.write(`${DIM}(no messages)${RESET}\n`);
+        } else {
+          if (archived.length > 0) {
+            process.stdout.write(
+              `${DIM}── archived (${archived.length} messages)${RESET}\n`,
+            );
+            for (const m of archived) renderTranscriptMessage(m, true);
+          }
+          if (messages.length > 0) {
+            process.stdout.write(`${DIM}── active (${messages.length} messages)${RESET}\n`);
+            for (const m of messages) renderTranscriptMessage(m, false);
+          }
+        }
       } else if (cmd === "compact") {
         const keepRaw = arg ? parseInt(arg, 10) : NaN;
         const keep = Number.isFinite(keepRaw) ? Math.max(0, keepRaw) : 4;
-        const beforeMessages = messages.length;
-        const beforeChars = messages.reduce(
-          (n, m) =>
-            n + (typeof m.content === "string" ? m.content.length : 0),
-          0,
-        );
-        const spinner = new Spinner("compacting");
-        spinner.start();
-        try {
-          const result = await compactSession(session, keep, model);
-          spinner.stop();
-          if (!result) {
-            process.stdout.write(
-              `${DIM}nothing to compact (need more than ${keep} user turns)${RESET}\n`,
-            );
-          } else {
-            session.messages = result.remainingMessages;
-            messages = session.messages;
-            session.compaction = {
-              summary: result.summary,
-              compacted_at: Date.now(),
-              turns_removed:
-                (session.compaction?.turns_removed ?? 0) + result.turnsRemoved,
-            };
-            // The summarizer turn is a real billable API call — fold its
-            // usage into the running stats so /cost matches reality.
-            stats.prompts += 1;
-            recordUsage(stats, result.usage);
-            const afterChars = messages.reduce(
-              (n, m) =>
-                n + (typeof m.content === "string" ? m.content.length : 0),
-              0,
-            );
-            const summaryChars = result.summary.length;
-            process.stdout.write(
-              `${DIM}compacted ${result.turnsRemoved} user turn(s); messages ${beforeMessages} → ${messages.length}; chars ${beforeChars} → ${afterChars} + ${summaryChars} summary${RESET}\n`,
-            );
-            refreshStatus();
-            await persist();
-          }
-        } catch (e) {
-          spinner.stop();
-          if (e instanceof DeepSeekError) {
-            process.stderr.write(
-              `${RED}compaction failed: ${formatApiError(e)}${RESET}\n`,
-            );
-          } else {
-            process.stderr.write(
-              `${RED}compaction failed: ${(e as Error).message}${RESET}\n`,
-            );
-          }
-        }
+        await runCompaction(keep, false);
       } else if (cmd === "edit") {
         const draft = openEditor(arg ? arg + "\n" : "");
         if (draft === null) {
@@ -498,11 +504,106 @@ async function main(): Promise<void> {
       rlAny.history.length = 0;
       rlAny.history.push(...histSnapshot);
     }
+    // After every turn, kick off an auto-compaction if ctx is over budget.
+    if (AUTO_COMPACT_AT_TOKENS > 0) {
+      const ctx = estimateContextTokens(messages);
+      if (ctx > AUTO_COMPACT_AT_TOKENS) {
+        await runCompaction(AUTO_COMPACT_KEEP, true);
+      }
+    }
+  }
+
+  async function runCompaction(keep: number, auto: boolean): Promise<void> {
+    const beforeMessages = messages.length;
+    const beforeChars = messages.reduce(
+      (n, m) => n + (typeof m.content === "string" ? m.content.length : 0),
+      0,
+    );
+    if (auto) {
+      process.stdout.write(
+        `${DIM}── auto-compact (ctx > ${AUTO_COMPACT_AT_TOKENS} tokens)${RESET}\n`,
+      );
+    }
+    const spinner = new Spinner("compacting");
+    spinner.start();
+    try {
+      const result = await compactSession(session, keep, model);
+      spinner.stop();
+      if (!result) {
+        if (!auto) {
+          process.stdout.write(
+            `${DIM}nothing to compact (need more than ${keep} user turns)${RESET}\n`,
+          );
+        }
+        return;
+      }
+      // Move the summarized messages into the on-disk archive so /transcript
+      // can still show them. They're no longer sent to the API.
+      session.archivedMessages = [
+        ...(session.archivedMessages ?? []),
+        ...result.droppedMessages,
+      ];
+      session.messages = result.remainingMessages;
+      messages = session.messages;
+      session.compaction = {
+        summary: result.summary,
+        compacted_at: Date.now(),
+        turns_removed:
+          (session.compaction?.turns_removed ?? 0) + result.turnsRemoved,
+      };
+      stats.prompts += 1;
+      recordUsage(stats, result.usage);
+      const afterChars = messages.reduce(
+        (n, m) => n + (typeof m.content === "string" ? m.content.length : 0),
+        0,
+      );
+      const summaryChars = result.summary.length;
+      process.stdout.write(
+        `${DIM}compacted ${result.turnsRemoved} user turn(s); messages ${beforeMessages} → ${messages.length}; chars ${beforeChars} → ${afterChars} + ${summaryChars} summary${RESET}\n`,
+      );
+      refreshStatus();
+      await persist();
+    } catch (e) {
+      spinner.stop();
+      if (e instanceof DeepSeekError) {
+        process.stderr.write(
+          `${RED}compaction failed: ${formatApiError(e)}${RESET}\n`,
+        );
+      } else {
+        process.stderr.write(
+          `${RED}compaction failed: ${(e as Error).message}${RESET}\n`,
+        );
+      }
+    }
   }
   approval.setAsker(null);
   rl.close();
   statusBar.disable();
   process.stdout.write(`\n${DIM}${formatCost(stats, model)}${RESET}\n`);
+}
+
+function renderTranscriptMessage(m: Message, archived: boolean): void {
+  const tag = archived ? `${DIM}archived${RESET} ` : "";
+  const role = m.role;
+  const color =
+    role === "user" ? "\x1b[36m" : role === "assistant" ? "\x1b[35m" : DIM;
+  const content = typeof m.content === "string" ? m.content : "";
+  process.stdout.write(`\n${tag}${BOLD}${color}${role}${RESET}\n`);
+  if (m.tool_calls && m.tool_calls.length) {
+    for (const tc of m.tool_calls) {
+      process.stdout.write(
+        `${DIM}  → ${tc.function.name}(${truncateForTranscript(tc.function.arguments, 200)})${RESET}\n`,
+      );
+    }
+  }
+  if (m.tool_call_id) {
+    process.stdout.write(`${DIM}  ← tool_call_id: ${m.tool_call_id}${RESET}\n`);
+  }
+  if (content) process.stdout.write(content + "\n");
+}
+
+function truncateForTranscript(s: string, n: number): string {
+  return s.length <= n ? s : s.slice(0, n) + "…";
 }
 
 function formatRelative(ts: number): string {

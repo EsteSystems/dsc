@@ -10,6 +10,9 @@ export interface CompactResult {
   turnsRemoved: number;
   /** New messages array — the kept tail. */
   remainingMessages: Message[];
+  /** The messages that were summarized away. Callers can archive these
+   *  so /transcript can still render the full history. */
+  droppedMessages: Message[];
   /** Usage from the summarizer's own API call so callers can fold it into
    *  their running stats. The summarization is a real, billable request. */
   usage?: Usage;
@@ -112,6 +115,7 @@ export async function compactSession(
     summary: content,
     turnsRemoved: countUserTurns(toSummarize),
     remainingMessages,
+    droppedMessages: toSummarize,
     usage: resp.usage,
   };
 
