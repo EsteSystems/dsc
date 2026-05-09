@@ -1,5 +1,9 @@
 import * as readline from "node:readline/promises";
 import { stdin as input, stdout as output } from "node:process";
+import { spawnSync } from "node:child_process";
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import * as os from "node:os";
+import * as path from "node:path";
 import {
   AVAILABLE_MODELS,
   DEFAULT_MODEL,
@@ -100,7 +104,14 @@ REPL commands:
   /list          List sessions in this cwd
   /resume <#>    Resume a session by index from /list (or 'last')
   /audit         Print where the JSONL audit log lives
+  /edit [text]   Compose the next prompt in $EDITOR (good for paste-heavy
+                 or multi-line input). Optional initial text seeds the buffer.
   /exit          Quit
+
+Multi-line input:
+  End a line with a single \\ to continue on the next line (bash-style).
+  An even number of trailing backslashes is treated as literal.
+  For paste-heavy or longer drafts, use /edit.
 
 Audit log:
   Every tool call (bash, edits, reads, fetches, rejections) is recorded
@@ -293,7 +304,7 @@ async function main(): Promise<void> {
   while (true) {
     let line: string;
     try {
-      line = await rl.question(`${BOLD}> ${RESET}`);
+      line = await readPromptInput(rl);
     } catch {
       break; // Ctrl+D
     }
@@ -392,17 +403,34 @@ async function main(): Promise<void> {
         process.stdout.write(`${DIM}reasoning: ${showReasoning ? "on" : "off"}${RESET}\n`);
       } else if (cmd === "audit") {
         process.stdout.write(`${DIM}${audit.auditLogPath()}${RESET}\n`);
+      } else if (cmd === "edit") {
+        const draft = openEditor(arg ? arg + "\n" : "");
+        if (draft === null) {
+          process.stdout.write(`${RED}editor failed${RESET}\n`);
+        } else if (!draft.trim()) {
+          process.stdout.write(`${DIM}(empty draft, not sent)${RESET}\n`);
+        } else {
+          process.stdout.write(`${DIM}── editor draft (${draft.length} chars):${RESET}\n`);
+          process.stdout.write(draft.replace(/\n/g, "\n  ") + "\n");
+          process.stdout.write(`${DIM}──${RESET}\n`);
+          void replHistory.append(draft);
+          await runTurnWithHistorySnapshot(draft);
+        }
       } else {
         process.stdout.write(`${RED}unknown command: /${cmd}${RESET}\n`);
       }
       continue;
     }
 
+    await runTurnWithHistorySnapshot(trimmed);
+  }
+
+  async function runTurnWithHistorySnapshot(text: string): Promise<void> {
     // Snapshot rl.history so approval y/N answers (which readline auto-adds)
     // don't leak into up-arrow recall.
     const histSnapshot = rlAny.history.slice();
     try {
-      await runTurn(trimmed);
+      await runTurn(text);
     } finally {
       rlAny.history.length = 0;
       rlAny.history.push(...histSnapshot);
@@ -423,6 +451,58 @@ function formatRelative(ts: number): string {
   if (h < 24) return `${h}h ago`;
   const d = Math.floor(h / 24);
   return `${d}d ago`;
+}
+
+/**
+ * Read one logical user prompt, supporting bash-style backslash continuation:
+ * an odd number of trailing backslashes on a submitted line means "continue
+ * on the next line"; the last backslash is consumed and replaced with a
+ * literal newline. An even count (e.g. \\) is treated as literal trailing
+ * backslashes and the line submits.
+ */
+async function readPromptInput(rl: readline.Interface): Promise<string> {
+  const FIRST = `${BOLD}> ${RESET}`;
+  const CONT = `${DIM}… ${RESET}`;
+  let buf = "";
+  let prompt = FIRST;
+  while (true) {
+    const line = await rl.question(prompt);
+    const trailing = (line.match(/\\+$/) || [""])[0].length;
+    if (trailing % 2 === 1) {
+      buf += line.slice(0, -1) + "\n";
+      prompt = CONT;
+      continue;
+    }
+    buf += line;
+    return buf;
+  }
+}
+
+/**
+ * Open $EDITOR (preferring $VISUAL) on a temp .md file seeded with `initial`.
+ * Returns the file's contents on save, or null if the editor failed to launch.
+ * Empty/whitespace-only results are returned as "" so the caller can decide
+ * whether to skip the turn.
+ */
+function openEditor(initial: string): string | null {
+  const editor = process.env.VISUAL || process.env.EDITOR || "vi";
+  const tmpDir = mkdtempSync(path.join(os.tmpdir(), "dsc-edit-"));
+  const tmpFile = path.join(tmpDir, "prompt.md");
+  try {
+    writeFileSync(tmpFile, initial, "utf8");
+    const r = spawnSync(editor, [tmpFile], { stdio: "inherit" });
+    if (r.error) return null;
+    const content = readFileSync(tmpFile, "utf8");
+    return content.replace(/\n+$/, "");
+  } catch {
+    return null;
+  } finally {
+    try {
+      rmSync(tmpDir, { recursive: true, force: true });
+    } catch {
+      // best-effort
+    }
+  }
 }
 
 main().catch((e) => {
