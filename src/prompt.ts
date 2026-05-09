@@ -29,17 +29,25 @@ export interface PromptContext {
   date: Date;
   /** Pre-formatted status line (model · cost · tokens · ctx · session). */
   statusLine?: string;
+  /** Cumulative summary of older turns set by /compact. */
+  summary?: string;
 }
 
 /**
  * Returns the static system prompt followed by a small dynamic block with the
- * cwd, date, and current status line. Static text comes first so the
- * prefix-cache prefix stays stable; only the trailing bytes vary per turn.
+ * cwd, date, status line, and (when /compact has been run) a summary of older
+ * turns. Static text comes first so the prefix-cache prefix stays stable; only
+ * the trailing bytes vary per turn.
  */
 export function buildSystemPrompt(ctx: PromptContext): string {
   const lines: string[] = [SYSTEM_PROMPT, "", "Current context:"];
   lines.push(`- cwd: ${ctx.cwd}`);
   lines.push(`- date: ${ctx.date.toISOString().slice(0, 10)}`);
   if (ctx.statusLine) lines.push(`- status: ${ctx.statusLine}`);
+  if (ctx.summary) {
+    lines.push("");
+    lines.push("Previously in this session (summary of compacted turns):");
+    lines.push(ctx.summary);
+  }
   return lines.join("\n");
 }

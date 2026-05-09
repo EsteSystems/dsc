@@ -39,6 +39,13 @@ interface SessionFileV2 {
   updated_at: number;
   messages: Message[];
   stats: Omit<Stats, "files_touched"> & { files_touched: string[] };
+  compaction?: CompactionState;
+}
+
+export interface CompactionState {
+  summary: string;
+  compacted_at: number;
+  turns_removed: number;
 }
 
 // v1 was the per-cwd ./.dsc-history.json shape
@@ -56,6 +63,7 @@ export interface SessionState {
   messages: Message[];
   stats: Stats;
   created_at: number;
+  compaction?: CompactionState;
 }
 
 function newSessionId(): string {
@@ -117,6 +125,7 @@ export async function saveSession(state: SessionState): Promise<void> {
     updated_at: Date.now(),
     messages: state.messages,
     stats: statsToPersisted(state.stats),
+    ...(state.compaction ? { compaction: state.compaction } : {}),
   };
   const tmp = file + ".tmp";
   await fs.writeFile(tmp, JSON.stringify(data, null, 2), "utf8");
@@ -146,6 +155,7 @@ export async function loadSession(id: string): Promise<SessionState | null> {
     messages: data.messages,
     stats: statsFromPersisted(data.stats),
     created_at: data.created_at,
+    compaction: data.compaction,
   };
 }
 

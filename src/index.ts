@@ -19,7 +19,8 @@ import * as history from "./history.js";
 import * as approval from "./approval.js";
 import * as replHistory from "./repl_history.js";
 import * as audit from "./audit.js";
-import { StatusBar } from "./ui.js";
+import { compactSession } from "./compact.js";
+import { Spinner, StatusBar } from "./ui.js";
 
 const RESET = "\x1b[0m";
 const DIM = "\x1b[2m";
@@ -104,6 +105,10 @@ REPL commands:
   /list          List sessions in this cwd
   /resume <#>    Resume a session by index from /list (or 'last')
   /audit         Print where the JSONL audit log lives
+  /compact [N]   Summarize older turns into a synthetic block (kept in the
+                 system prompt) and drop them from the message log.
+                 Keeps the last N user turns verbatim (default N=4).
+                 Cumulative across re-runs.
   /edit [text]   Compose the next prompt in $EDITOR (good for paste-heavy
                  or multi-line input). Optional initial text seeds the buffer.
   /exit          Quit
@@ -203,6 +208,7 @@ async function main(): Promise<void> {
       reasoning: showReasoning,
       contextTokens: estimateContextTokens(messages),
       sessionSeconds: Math.floor((Date.now() - sessionStart) / 1000),
+      compacted: !!session.compaction,
     });
   const refreshStatus = () => statusBar.render(currentStatusLine());
 
@@ -237,6 +243,7 @@ async function main(): Promise<void> {
         onTurn: refreshStatus,
         showReasoning,
         getStatusLine: currentStatusLine,
+        getSummary: () => session.compaction?.summary,
       });
     } catch (e) {
       if ((e as Error).name === "AbortError" || pendingAbort?.signal.aborted) {
@@ -403,6 +410,57 @@ async function main(): Promise<void> {
         process.stdout.write(`${DIM}reasoning: ${showReasoning ? "on" : "off"}${RESET}\n`);
       } else if (cmd === "audit") {
         process.stdout.write(`${DIM}${audit.auditLogPath()}${RESET}\n`);
+      } else if (cmd === "compact") {
+        const keepRaw = arg ? parseInt(arg, 10) : NaN;
+        const keep = Number.isFinite(keepRaw) ? Math.max(0, keepRaw) : 4;
+        const beforeMessages = messages.length;
+        const beforeChars = messages.reduce(
+          (n, m) =>
+            n + (typeof m.content === "string" ? m.content.length : 0),
+          0,
+        );
+        const spinner = new Spinner("compacting");
+        spinner.start();
+        try {
+          const result = await compactSession(session, keep, model);
+          spinner.stop();
+          if (!result) {
+            process.stdout.write(
+              `${DIM}nothing to compact (need more than ${keep} user turns)${RESET}\n`,
+            );
+          } else {
+            session.messages = result.remainingMessages;
+            messages = session.messages;
+            session.compaction = {
+              summary: result.summary,
+              compacted_at: Date.now(),
+              turns_removed:
+                (session.compaction?.turns_removed ?? 0) + result.turnsRemoved,
+            };
+            const afterChars = messages.reduce(
+              (n, m) =>
+                n + (typeof m.content === "string" ? m.content.length : 0),
+              0,
+            );
+            const summaryChars = result.summary.length;
+            process.stdout.write(
+              `${DIM}compacted ${result.turnsRemoved} user turn(s); messages ${beforeMessages} → ${messages.length}; chars ${beforeChars} → ${afterChars} + ${summaryChars} summary${RESET}\n`,
+            );
+            refreshStatus();
+            await persist();
+          }
+        } catch (e) {
+          spinner.stop();
+          if (e instanceof DeepSeekError) {
+            process.stderr.write(
+              `${RED}compaction failed: ${formatApiError(e)}${RESET}\n`,
+            );
+          } else {
+            process.stderr.write(
+              `${RED}compaction failed: ${(e as Error).message}${RESET}\n`,
+            );
+          }
+        }
       } else if (cmd === "edit") {
         const draft = openEditor(arg ? arg + "\n" : "");
         if (draft === null) {

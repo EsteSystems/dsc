@@ -72,6 +72,9 @@ export interface RunOptions {
   /** Returns the line that gets embedded into the system prompt. Called fresh
    *  before every chatStream so the model sees the latest cost/ctx numbers. */
   getStatusLine?: () => string;
+  /** Returns the current /compact summary (folded into the system prompt).
+   *  Refreshed per call so re-running /compact takes effect immediately. */
+  getSummary?: () => string | undefined;
 }
 
 export async function runAgent(opts: RunOptions): Promise<void> {
@@ -90,6 +93,7 @@ export async function runAgent(opts: RunOptions): Promise<void> {
         cwd: toolCtx.cwd,
         date: new Date(),
         statusLine: opts.getStatusLine?.(),
+        summary: opts.getSummary?.(),
       }),
     },
     ...repairToolCallPairing(conversationMessages()),
@@ -231,12 +235,15 @@ export interface StatusOptions {
   reasoning?: boolean; // if false, append " no-reasoning"
   contextTokens?: number; // current message-list size, for context-budget feel
   sessionSeconds?: number; // wall-clock since REPL start
+  compacted?: boolean; // /compact has been run on this session
 }
 
 export function formatStatus(stats: Stats, model: Model, opts: StatusOptions): string {
   const cost = computeCostUsd(stats, model);
   const flags =
-    (opts.yolo ? " yolo" : "") + (opts.reasoning === false ? " no-reasoning" : "");
+    (opts.yolo ? " yolo" : "") +
+    (opts.reasoning === false ? " no-reasoning" : "") +
+    (opts.compacted ? " compacted" : "");
   const ctx =
     opts.contextTokens !== undefined ? `  ctx:${formatCount(opts.contextTokens)}` : "";
   const session =
