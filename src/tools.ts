@@ -262,6 +262,24 @@ async function readFile(args: Record<string, unknown>, ctx: ToolContext): Promis
   if (!(await exists(abs))) {
     return { content: `error: file does not exist: ${abs}`, audit: { path: abs, error: "missing" } };
   }
+  // Catch the common case where the agent passes a directory path. Without
+  // this, fs.readFile throws EISDIR and the agent has to bounce through a
+  // `bash ls` to figure out what's there. Point it at the right tool instead.
+  let stat;
+  try {
+    stat = await fs.stat(abs);
+  } catch (e) {
+    return { content: `error: ${(e as Error).message}`, audit: { path: abs, error: "stat_failed" } };
+  }
+  if (stat.isDirectory()) {
+    return {
+      content:
+        `error: '${abs}' is a directory, not a file. ` +
+        `Use the glob tool to list it: glob({"pattern": "*", "path": "${abs}"}) ` +
+        `for top-level entries, or "**/*" for everything recursively.`,
+      audit: { path: abs, error: "is_directory" },
+    };
+  }
   let text: string;
   try {
     text = await fs.readFile(abs, "utf8");
