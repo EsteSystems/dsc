@@ -19,7 +19,7 @@ const ITALIC = "\x1b[3m";
 const RED = "\x1b[31m";
 const RESET = "\x1b[0m";
 
-function streamHandlers(spinner: Spinner, showReasoning: boolean) {
+function streamHandlers(spinner: Spinner, showReasoning: boolean, assistantLabel: string) {
   let contentStarted = false;
   let reasoningStarted = false;
   const renderer = new MarkdownRenderer();
@@ -33,7 +33,7 @@ function streamHandlers(spinner: Spinner, showReasoning: boolean) {
           // Close the reasoning block (reset styling, blank line) before the answer.
           process.stdout.write(`${RESET}\n\n`);
         }
-        process.stdout.write(`${BOLD}assistant${RESET}: `);
+        process.stdout.write(`${BOLD}${assistantLabel}${RESET} `);
         contentStarted = true;
       }
       process.stdout.write(renderer.push(text));
@@ -75,11 +75,14 @@ export interface RunOptions {
   /** Returns the current /compact summary (folded into the system prompt).
    *  Refreshed per call so re-running /compact takes effect immediately. */
   getSummary?: () => string | undefined;
+  /** Prefix shown before streamed assistant content. Defaults to "assistant:". */
+  assistantLabel?: string;
 }
 
 export async function runAgent(opts: RunOptions): Promise<void> {
   const { messages, model, stats, toolCtx, signal, onTurn } = opts;
   const showReasoning = opts.showReasoning ?? true;
+  const assistantLabel = opts.assistantLabel ?? "assistant:";
 
   // Build the message list to send: drop any leading system entry the caller
   // may have stashed (e.g. from an older session) and prepend a freshly-built
@@ -103,7 +106,7 @@ export async function runAgent(opts: RunOptions): Promise<void> {
     stats.prompts += 1;
     const spinner = new Spinner("thinking");
     spinner.start();
-    const handlers = streamHandlers(spinner, showReasoning);
+    const handlers = streamHandlers(spinner, showReasoning, assistantLabel);
     let resp;
     try {
       resp = await chatStream({
@@ -201,7 +204,7 @@ export async function runAgent(opts: RunOptions): Promise<void> {
   stats.prompts += 1;
   const spinner = new Spinner("wrapping up");
   spinner.start();
-  const handlers = streamHandlers(spinner, showReasoning);
+  const handlers = streamHandlers(spinner, showReasoning, assistantLabel);
   let final;
   try {
     final = await chatStream({

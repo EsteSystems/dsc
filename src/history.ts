@@ -47,6 +47,8 @@ interface SessionFileV2 {
   archivedMessages?: Message[];
   /** User-assigned name set via /save. */
   name?: string;
+  /** Custom prefix shown before streamed assistant turns (default `assistant:`). */
+  assistantLabel?: string;
 }
 
 export interface CompactionState {
@@ -76,6 +78,8 @@ export interface SessionState {
   archivedMessages?: Message[];
   /** Friendly name set by /save; usable in /resume in addition to id/index. */
   name?: string;
+  /** Custom prefix shown before streamed assistant turns (default `assistant:`). */
+  assistantLabel?: string;
 }
 
 function newSessionId(): string {
@@ -142,6 +146,7 @@ export async function saveSession(state: SessionState): Promise<void> {
       ? { archivedMessages: state.archivedMessages }
       : {}),
     ...(state.name ? { name: state.name } : {}),
+    ...(state.assistantLabel ? { assistantLabel: state.assistantLabel } : {}),
   };
   const tmp = file + ".tmp";
   await fs.writeFile(tmp, JSON.stringify(data, null, 2), "utf8");
@@ -174,6 +179,7 @@ export async function loadSession(id: string): Promise<SessionState | null> {
     compaction: data.compaction,
     archivedMessages: data.archivedMessages,
     name: data.name,
+    assistantLabel: data.assistantLabel,
   };
 }
 

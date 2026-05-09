@@ -107,6 +107,9 @@ REPL commands:
   /list          List sessions in this cwd
   /save <name>   Give the current session a friendly name (used by /resume
                  and shown in /list).
+  /rename <text> Replace the "assistant:" prefix on streamed turns with
+                 <text> (a name, glyph, or anything you like). No arg
+                 prints the current label; --reset / default restores it.
   /resume <ref>  Resume a session by index from /list, by /save'd name,
                  by id, or 'last' for the most recent.
   /audit [path|show [N]]
@@ -292,6 +295,7 @@ async function main(): Promise<void> {
         showReasoning,
         getStatusLine: currentStatusLine,
         getSummary: () => session.compaction?.summary,
+        assistantLabel: session.assistantLabel,
       });
     } catch (e) {
       if ((e as Error).name === "AbortError" || pendingAbort?.signal.aborted) {
@@ -416,6 +420,20 @@ async function main(): Promise<void> {
           process.stdout.write(
             `${DIM}session saved as "${name}" (id ${session.id})${RESET}\n`,
           );
+        }
+      } else if (cmd === "rename") {
+        const text = arg.trim();
+        if (!text) {
+          const cur = session.assistantLabel ?? "assistant:";
+          process.stdout.write(`${DIM}assistant label: "${cur}"${RESET}\n`);
+        } else if (text === "--reset" || text === "default") {
+          delete session.assistantLabel;
+          await persist();
+          process.stdout.write(`${DIM}assistant label reset to default${RESET}\n`);
+        } else {
+          session.assistantLabel = text;
+          await persist();
+          process.stdout.write(`${DIM}assistant label → "${text}"${RESET}\n`);
         }
       } else if (cmd === "resume") {
         const all = await history.listSessions(cwd);
@@ -700,6 +718,7 @@ const SLASH_COMMANDS: ReadonlyArray<string> = [
   "model",
   "quit",
   "reasoning",
+  "rename",
   "resume",
   "save",
   "transcript",
