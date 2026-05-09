@@ -10,6 +10,7 @@ import {
   DeepSeekError,
   configPath,
   hasApiKey,
+  recordUsage,
   type Message,
   type Model,
 } from "./api.js";
@@ -437,6 +438,10 @@ async function main(): Promise<void> {
               turns_removed:
                 (session.compaction?.turns_removed ?? 0) + result.turnsRemoved,
             };
+            // The summarizer turn is a real billable API call — fold its
+            // usage into the running stats so /cost matches reality.
+            stats.prompts += 1;
+            recordUsage(stats, result.usage);
             const afterChars = messages.reduce(
               (n, m) =>
                 n + (typeof m.content === "string" ? m.content.length : 0),

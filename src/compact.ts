@@ -1,4 +1,4 @@
-import { chat, type Message, type Model } from "./api.js";
+import { chat, type Message, type Model, type Usage } from "./api.js";
 import type { CompactionState, SessionState } from "./history.js";
 
 const MAX_INPUT_CHARS = 80_000; // hard cap on what we send to the summarizer
@@ -10,6 +10,9 @@ export interface CompactResult {
   turnsRemoved: number;
   /** New messages array — the kept tail. */
   remainingMessages: Message[];
+  /** Usage from the summarizer's own API call so callers can fold it into
+   *  their running stats. The summarization is a real, billable request. */
+  usage?: Usage;
 }
 
 /**
@@ -109,6 +112,7 @@ export async function compactSession(
     summary: content,
     turnsRemoved: countUserTurns(toSummarize),
     remainingMessages,
+    usage: resp.usage,
   };
 
   // Note: caller is responsible for assigning state.compaction = {...} since
