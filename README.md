@@ -33,7 +33,7 @@ source.
 **(A) From npm** *(after publish)*:
 
 ```sh
-npm install -g @este-systems/dsc
+npm install -g @este.systems/dsc
 ```
 
 **(B) From a local tarball** *(works on all platforms with the same npm)*:
@@ -341,7 +341,7 @@ deliberately excluded.
 
 ### Publishing to npm
 
-The package is configured to publish as `@este-systems/dsc` with public
+The package is configured to publish as `@este.systems/dsc` with public
 access. To release:
 
 ```sh
@@ -364,14 +364,14 @@ git push --follow-tags
 
 Notes:
 
-- The package name is **scoped** (`@este-systems/dsc`), so `npm publish`
+- The package name is **scoped** (`@este.systems/dsc`), so `npm publish`
   defaults to private. `publishConfig.access = "public"` in `package.json`
   overrides that. Don't drop it.
 - npm now nudges hard for **2FA**. Enable with
   `npm profile enable-2fa auth-and-writes`. You'll be asked for an OTP on
   every publish.
 - Once published, anyone can install with
-  `npm install -g @este-systems/dsc`. The CLI binary is still just `dsc`.
+  `npm install -g @este.systems/dsc`. The CLI binary is still just `dsc`.
 - After publish, the `pkg/*.tgz` produced locally is identical to what
   you uploaded — useful for offline installs (`scripts/install.sh`).
 
