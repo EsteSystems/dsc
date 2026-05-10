@@ -325,7 +325,7 @@ async function main(): Promise<void> {
 
   // REPL
   process.stdout.write(`${BOLD}dsc${RESET} ${DIM}(${model}${cli.yolo ? ", yolo" : ""})${RESET}  `);
-  process.stdout.write(`${DIM}type /help for commands, Ctrl+D to exit${RESET}\n`);
+  process.stdout.write(`${DIM}type /help for commands, ESC to interrupt a turn, Ctrl+D to exit${RESET}\n`);
   if (restoredTurns > 0) {
     process.stdout.write(`${DIM}restored ${restoredTurns}-turn history (use /clear to reset)${RESET}\n`);
   }
@@ -357,6 +357,29 @@ async function main(): Promise<void> {
     completer: completeSlashCommand,
   });
   approval.setAsker((q) => rl.question(q));
+
+  // ESC interrupts the current turn — more intuitive than Ctrl+C for "stop
+  // what the agent is doing right now". readline already puts stdin in raw
+  // mode and emits 'keypress' events for terminal input, so we just listen.
+  // Standalone ESC fires after a short disambiguation delay; ESC-prefixed
+  // sequences (arrow keys etc) come through as their named keys instead.
+  const onKeypress = (_str: string | undefined, key: { name?: string } | undefined) => {
+    if (
+      key?.name === "escape" &&
+      pendingAbort &&
+      !pendingAbort.signal.aborted
+    ) {
+      pendingAbort.abort();
+    }
+  };
+  process.stdin.on("keypress", onKeypress);
+  // Also catch readline's own SIGINT path for Ctrl+C — defends against the
+  // case where readline intercepts the signal before our process.on handler.
+  rl.on("SIGINT", () => {
+    if (pendingAbort && !pendingAbort.signal.aborted) {
+      pendingAbort.abort();
+    }
+  });
 
   // Seed up/down history from disk (newest first per readline's convention).
   void replHistory.compact();
@@ -638,6 +661,7 @@ async function main(): Promise<void> {
     }
   }
   approval.setAsker(null);
+  process.stdin.removeListener("keypress", onKeypress);
   rl.close();
   statusBar.disable();
   process.stdout.write(`\n${DIM}${formatCost(stats, model)}${RESET}\n`);

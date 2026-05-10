@@ -13,7 +13,7 @@ $RepoRoot = Resolve-Path (Join-Path $PSScriptRoot "..")
 if ($args.Count -ge 1 -and $args[0]) {
     $Tarball = $args[0]
 } else {
-    $candidates = Get-ChildItem -Path (Join-Path $RepoRoot "pkg") -Filter "dsc-*.tgz" -ErrorAction SilentlyContinue |
+    $candidates = Get-ChildItem -Path (Join-Path $RepoRoot "pkg") -Filter "*.tgz" -ErrorAction SilentlyContinue |
         Sort-Object LastWriteTime -Descending
     if (-not $candidates) {
         Write-Error "no tarball found in $RepoRoot\pkg\. Run ``npm run package`` first."

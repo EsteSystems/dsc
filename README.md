@@ -223,20 +223,55 @@ file value.
 For local global install (any platform with Node 22+):
 
 ```sh
-npm run package              # builds dist/ and produces pkg/dsc-<version>.tgz
-scripts/install.sh           # linux / macOS  — wraps `npm install -g pkg/dsc-*.tgz`
+npm run package              # produces pkg/<name>-<version>.tgz
+scripts/install.sh           # linux / macOS  — wraps `npm install -g pkg/*.tgz`
 .\scripts\install.ps1        # Windows PowerShell — same idea
 ```
 
-The package script wipes `dist/` first to avoid stale artifacts (e.g.
-left over after a branch switch) sneaking into the tarball. The
-resulting `pkg/dsc-<version>.tgz` is also exactly what you'd publish
-to npm with `npm publish`.
+The build is driven by the `prepack` lifecycle hook (`scripts/build.mjs`),
+which wipes `dist/` before recompiling. That keeps stale artifacts (e.g.
+leftover from a branch switch) out of the tarball whether you ran
+`npm pack`, `npm publish`, or `npm run package`.
 
-What ships in the tarball is controlled by the `files` field in
-`package.json` (currently `bin/`, `dist/`, `README.md`). Source TypeScript
-and devDeps are deliberately excluded; the runtime needs only the
-compiled output.
+What ships is controlled by the `files` field in `package.json` (currently
+`bin/`, `dist/`, `README.md`, `LICENSE`). Source TypeScript and devDeps are
+deliberately excluded.
+
+### Publishing to npm
+
+The package is configured to publish as `@este-systems/dsc` with public
+access. To release:
+
+```sh
+# 1. Bump the version (semver). For a pre-1.0 patch:
+npm version patch                       # → 0.1.1, also creates a git tag
+
+# 2. Make sure you're logged in to npm:
+npm whoami                              # should print your username
+npm login                               # if not
+
+# 3. (Optional) preview the tarball:
+npm pack --dry-run
+
+# 4. Publish:
+npm publish                             # respects publishConfig.access=public
+
+# 5. Push the version-bump commit and tag:
+git push --follow-tags
+```
+
+Notes:
+
+- The package name is **scoped** (`@este-systems/dsc`), so `npm publish`
+  defaults to private. `publishConfig.access = "public"` in `package.json`
+  overrides that. Don't drop it.
+- npm now nudges hard for **2FA**. Enable with
+  `npm profile enable-2fa auth-and-writes`. You'll be asked for an OTP on
+  every publish.
+- Once published, anyone can install with
+  `npm install -g @este-systems/dsc`. The CLI binary is still just `dsc`.
+- After publish, the `pkg/*.tgz` produced locally is identical to what
+  you uploaded — useful for offline installs (`scripts/install.sh`).
 
 ## Development
 

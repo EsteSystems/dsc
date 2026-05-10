@@ -14,7 +14,7 @@ REPO_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 if [ "${1:-}" != "" ]; then
   TARBALL="$1"
 else
-  TARBALL="$(ls -1t "$REPO_ROOT/pkg"/dsc-*.tgz 2>/dev/null | head -n1 || true)"
+  TARBALL="$(ls -1t "$REPO_ROOT/pkg"/*.tgz 2>/dev/null | head -n1 || true)"
   if [ -z "$TARBALL" ]; then
     echo "no tarball found in $REPO_ROOT/pkg/. Run \`npm run package\` first." >&2
     exit 1

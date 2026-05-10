@@ -1,7 +1,26 @@
 {
-  "name": "dsc",
+  "name": "@este-systems/dsc",
   "version": "0.1.0",
   "description": "Claude-Code-style CLI coding agent for DeepSeek",
+  "keywords": [
+    "deepseek",
+    "ai",
+    "agent",
+    "cli",
+    "coding-assistant",
+    "repl",
+    "tools"
+  ],
+  "author": "Este Systems <contact@este.systems>",
+  "license": "MIT",
+  "homepage": "https://github.com/este-systems/dsc#readme",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/este-systems/dsc.git"
+  },
+  "bugs": {
+    "url": "https://github.com/este-systems/dsc/issues"
+  },
   "type": "module",
   "bin": {
     "dsc": "./bin/dsc.mjs"
@@ -9,14 +28,19 @@
   "files": [
     "bin/",
     "dist/",
-    "README.md"
+    "README.md",
+    "LICENSE"
   ],
   "scripts": {
     "dev": "tsx src/index.ts",
     "build": "tsc -p .",
     "typecheck": "tsc -p . --noEmit",
     "start": "node dist/index.js",
-    "package": "node scripts/package.mjs"
+    "package": "node scripts/package.mjs",
+    "prepack": "node scripts/build.mjs"
+  },
+  "publishConfig": {
+    "access": "public"
   },
   "engines": {
     "node": ">=22"
