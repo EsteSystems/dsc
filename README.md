@@ -8,21 +8,90 @@ and approvals happen inline.
 
 ## Install
 
-Requires Node 22+ (the `glob` tool uses `fs.promises.glob`).
+dsc requires **Node 22+** (it uses `fs.promises.glob`, stable since 22.0).
+
+### Step 1 — install Node 22+
+
+| Platform | One-liner |
+|---|---|
+| **Linux (Debian/Ubuntu)** | `curl -fsSL https://deb.nodesource.com/setup_22.x \| sudo -E bash - && sudo apt install -y nodejs` |
+| **Linux (Fedora/RHEL)** | `sudo dnf install -y nodejs:22/common` |
+| **Linux (Arch)** | `sudo pacman -S nodejs npm` |
+| **macOS** | `brew install node@22 && brew link node@22` |
+| **Windows (winget)** | `winget install OpenJS.NodeJS.LTS` |
+| **Windows (scoop)** | `scoop install nodejs-lts` |
+| **Cross-platform (nvm)** | `nvm install 22 && nvm use 22` |
+
+Verify: `node --version` should print `v22.x.x` or higher.
+
+### Step 2 — install dsc
+
+Three options. Once the package is published to npm, **(A)** is what you want.
+Today, use **(B)** for a frozen tarball or **(C)** if you'll be hacking on the
+source.
+
+**(A) From npm** *(after publish)*:
 
 ```sh
-git clone <repo> ~/code/dsc
-cd ~/code/dsc
-npm install
-npm link        # exposes `dsc` on PATH
+npm install -g @este-systems/dsc
 ```
 
-The `dsc` shim in `bin/dsc.mjs` runs the TypeScript sources directly via
-`tsx`, so your edits take effect on the next launch — no rebuild step. If
-the shim can't find `node_modules/.bin/tsx` it falls back to `dist/`
-(populate with `npm run build` for production-style installs).
+**(B) From a local tarball** *(works on all platforms with the same npm)*:
+
+```sh
+git clone https://github.com/EsteSystems/dsc.git
+cd dsc
+npm install
+npm run package      # produces pkg/<name>-<version>.tgz
+```
+
+then on **Linux / macOS**:
+
+```sh
+scripts/install.sh
+```
+
+or on **Windows PowerShell**:
+
+```powershell
+.\scripts\install.ps1
+```
+
+Both wrappers just call `npm install -g pkg/*.tgz` after auto-finding the
+tarball.
+
+**(C) From source for development** *(live edits, no rebuild step)*:
+
+```sh
+git clone https://github.com/EsteSystems/dsc.git
+cd dsc
+npm install
+npm link             # exposes `dsc` globally
+```
+
+The shim in `bin/dsc.mjs` runs the TypeScript sources directly through
+`tsx`, so your next `dsc` launch picks up edits immediately. If `tsx`
+isn't available it falls back to `dist/` (populate with `npm run build`).
+
+### Step 3 — verify
+
+```sh
+dsc --help
+```
+
+If you get "command not found", your shell's `PATH` doesn't include npm's
+global-bin directory. Find it with `npm config get prefix`; the binary
+lives in `<prefix>/bin` on Linux/macOS or `<prefix>` on Windows. Add that
+to your `PATH` and reopen the terminal.
 
 ## API key
+
+dsc reads its DeepSeek key from `~/.config/deepseek/deepseek.json` on every
+platform — Node's `os.homedir()` resolves to `C:\Users\<you>` on Windows, so
+the actual file path is `C:\Users\<you>\.config\deepseek\deepseek.json`. Set
+`XDG_CONFIG_HOME` if you'd rather put it elsewhere.
+
+**Linux / macOS:**
 
 ```sh
 mkdir -p ~/.config/deepseek
@@ -32,6 +101,14 @@ cat > ~/.config/deepseek/deepseek.json <<'JSON'
 }
 JSON
 chmod 600 ~/.config/deepseek/deepseek.json
+```
+
+**Windows PowerShell:**
+
+```powershell
+$dir = "$HOME\.config\deepseek"
+New-Item -ItemType Directory -Force -Path $dir | Out-Null
+'{"api_key":"sk-..."}' | Set-Content -Path "$dir\deepseek.json" -Encoding utf8
 ```
 
 Accepted shapes:
