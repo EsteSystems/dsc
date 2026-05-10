@@ -23,7 +23,7 @@
   },
   "type": "module",
   "bin": {
-    "dsc": "./bin/dsc.mjs"
+    "dsc": "bin/dsc.mjs"
   },
   "files": [
     "bin/",
