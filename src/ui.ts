@@ -72,12 +72,20 @@ export class Spinner {
 }
 
 /**
- * Status bar pinned to the last row of the terminal via DECSTBM
- * (DEC Set Top and Bottom Margins). Reserves the bottom row for the bar,
- * lets everything else scroll within rows 1..N-1. Re-asserts the region
- * on a periodic timer so tools that write past it don't dislodge things.
+ * Status bar pinned to the last row via DECSTBM. Sets the scroll region
+ * to 1..N-1 at enable + on resize; paint() writes to row N without
+ * touching margins.
  *
- * Falls back to no-op when stdout isn't a TTY (piped output stays clean).
+ * Repaint strategy is "overwrite, then trim". We write the status text
+ * and then emit `\x1b[K` (clear-to-end-of-line) to wipe any trailing
+ * characters from a previously-longer status. We never `\x1b[2K` (clear
+ * whole row) before writing — that's the flash that made the earlier
+ * version flicker on every periodic repaint.
+ *
+ * A 1 s timer repaints unconditionally so the status survives
+ * terminal-side weirdness (some terminals clobber row N when the scroll
+ * region scrolls). With overwrite-in-place, identical repaints are
+ * visually a no-op.
  */
 export class StatusBar {
   private text = "";
@@ -96,8 +104,6 @@ export class StatusBar {
     process.stdout.write(`\x1b[r\x1b[1;${rows - 1}r\x1b[${rows - 1};1H`);
     this.active = true;
 
-    // Periodic re-paint defends against scroll-region drift (some tools
-    // reset the region or move the cursor past it).
     this.timer = setInterval(() => this.paint(), 1000);
     this.timer.unref?.();
     process.stdout.on("resize", this.resizeHandler);
@@ -125,16 +131,30 @@ export class StatusBar {
     if (!this.active) return;
     if (!process.stdout.isTTY) return;
     const rows = process.stdout.rows ?? 24;
+    const cols = process.stdout.columns ?? 80;
     if (rows < 4) return;
 
-    // Sequence: re-assert scroll region, save cursor, jump to bottom row,
-    // clear it, write reverse-video status, restore cursor.
+    // Truncate to fit. We add 1 leading + 1 trailing space inside the
+    // reverse-video block, so usable width is cols-2. Without this, a
+    // status wider than the terminal auto-wraps onto a non-existent
+    // row N+1, scrolling the whole screen up and leaving only the
+    // wrapped tail visible on row N.
+    const maxLen = Math.max(0, cols - 2);
+    const display =
+      this.text.length > maxLen
+        ? this.text.slice(0, Math.max(0, maxLen - 1)) + "…"
+        : this.text;
+
+    // Save cursor → jump to row N col 1 → write reverse-video status
+    // (overwrites in place; no pre-clear means no blank flash) →
+    // \x1b[K trims any trailing characters from a longer prior status →
+    // restore cursor. Region is left alone — setting it here would
+    // force the cursor to (1,1) and break the prompt position.
     process.stdout.write(
-      `\x1b[1;${rows - 1}r` +
-        `\x1b7` +
+      `\x1b7` +
         `\x1b[${rows};1H` +
-        `\x1b[2K` +
-        `\x1b[7m ${this.text} \x1b[0m` +
+        `\x1b[7m ${display} \x1b[0m` +
+        `\x1b[K` +
         `\x1b8`,
     );
   }
@@ -143,8 +163,6 @@ export class StatusBar {
     if (!this.active) return;
     const rows = process.stdout.rows ?? 24;
     if (rows < 4) return;
-    // Reset → set new region → repaint. The reset is needed because the
-    // old region is wrong dimensions for the new size.
     process.stdout.write(`\x1b[r\x1b[1;${rows - 1}r`);
     this.paint();
   }
