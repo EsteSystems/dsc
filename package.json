@@ -6,14 +6,20 @@
   "bin": {
     "dsc": "./bin/dsc.mjs"
   },
+  "files": [
+    "bin/",
+    "dist/",
+    "README.md"
+  ],
   "scripts": {
     "dev": "tsx src/index.ts",
     "build": "tsc -p .",
     "typecheck": "tsc -p . --noEmit",
-    "start": "node dist/index.js"
+    "start": "node dist/index.js",
+    "package": "node scripts/package.mjs"
   },
   "engines": {
-    "node": ">=18"
+    "node": ">=22"
   },
   "dependencies": {
     "diff": "^5.2.0"

@@ -218,12 +218,33 @@ Per-provider keys live in the config:
 `{PROVIDER}_API_KEY` env var (e.g. `BRAVE_API_KEY`) overrides the
 file value.
 
+## Packaging and distribution
+
+For local global install (any platform with Node 22+):
+
+```sh
+npm run package              # builds dist/ and produces pkg/dsc-<version>.tgz
+scripts/install.sh           # linux / macOS  — wraps `npm install -g pkg/dsc-*.tgz`
+.\scripts\install.ps1        # Windows PowerShell — same idea
+```
+
+The package script wipes `dist/` first to avoid stale artifacts (e.g.
+left over after a branch switch) sneaking into the tarball. The
+resulting `pkg/dsc-<version>.tgz` is also exactly what you'd publish
+to npm with `npm publish`.
+
+What ships in the tarball is controlled by the `files` field in
+`package.json` (currently `bin/`, `dist/`, `README.md`). Source TypeScript
+and devDeps are deliberately excluded; the runtime needs only the
+compiled output.
+
 ## Development
 
 ```sh
 npm run dev                  # tsx src/index.ts
 npm run typecheck            # tsc --noEmit
 npm run build                # compiles to dist/
+npm run package              # build + npm pack into pkg/
 ```
 
 Source layout:
