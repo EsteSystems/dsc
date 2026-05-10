@@ -86,12 +86,22 @@ to your `PATH` and reopen the terminal.
 
 ## API key
 
-dsc reads its DeepSeek key from `~/.config/deepseek/deepseek.json` on every
-platform — Node's `os.homedir()` resolves to `C:\Users\<you>` on Windows, so
-the actual file path is `C:\Users\<you>\.config\deepseek\deepseek.json`. Set
-`XDG_CONFIG_HOME` if you'd rather put it elsewhere.
+dsc reads its DeepSeek key from a JSON config file. The default path
+depends on your platform:
 
-**Linux / macOS:**
+| Platform | Default path |
+|---|---|
+| Linux / macOS | `~/.config/deepseek/deepseek.json` |
+| Windows | `%USERPROFILE%\.config\deepseek\deepseek.json` |
+
+On Windows, `%USERPROFILE%` is `C:\Users\<your account name>`, so the
+absolute path is e.g. `C:\Users\dann\.config\deepseek\deepseek.json`.
+Set `XDG_CONFIG_HOME` to override the location on any platform.
+
+The env var `DEEPSEEK_API_KEY` takes priority over the file when both
+are set.
+
+### Linux / macOS
 
 ```sh
 mkdir -p ~/.config/deepseek
@@ -103,15 +113,40 @@ JSON
 chmod 600 ~/.config/deepseek/deepseek.json
 ```
 
-**Windows PowerShell:**
+### Windows — PowerShell
 
 ```powershell
 $dir = "$HOME\.config\deepseek"
 New-Item -ItemType Directory -Force -Path $dir | Out-Null
-'{"api_key":"sk-..."}' | Set-Content -Path "$dir\deepseek.json" -Encoding utf8
+'{"api_key":"sk-..."}' | Set-Content -Path "$dir\deepseek.json" -Encoding utf8NoBOM
 ```
 
-Accepted shapes:
+`-Encoding utf8NoBOM` matters: PowerShell 5.1's `Set-Content -Encoding
+utf8` writes a UTF-8 BOM by default, and not every JSON parser likes
+that. dsc is forgiving (it strips a leading BOM), but using the explicit
+form keeps the file portable. PowerShell 7+ defaults to no-BOM.
+
+### Windows — cmd.exe
+
+```bat
+mkdir "%USERPROFILE%\.config\deepseek"
+echo {"api_key":"sk-..."} > "%USERPROFILE%\.config\deepseek\deepseek.json"
+```
+
+### Or skip the file: env var
+
+Any platform, any shell:
+
+```sh
+export DEEPSEEK_API_KEY=sk-...                          # bash / zsh
+$Env:DEEPSEEK_API_KEY = "sk-..."                        # PowerShell (current session)
+[Environment]::SetEnvironmentVariable(`
+  "DEEPSEEK_API_KEY", "sk-...", "User")                 # PowerShell (persisted)
+set DEEPSEEK_API_KEY=sk-...                             # cmd.exe (current session)
+setx DEEPSEEK_API_KEY "sk-..."                          # cmd.exe (persisted)
+```
+
+### Accepted file shapes
 
 ```jsonc
 { "api_key": "sk-..." }                                   // simple
@@ -119,8 +154,6 @@ Accepted shapes:
 { "env": { "DEEPSEEK_API_KEY": "sk-..." } }               // env-style
 { "env": { "ANTHROPIC_AUTH_TOKEN": "sk-..." } }           // claude-switcher compat
 ```
-
-The env var `DEEPSEEK_API_KEY` takes priority over the file when set.
 
 ## Quick start
 

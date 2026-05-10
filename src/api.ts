@@ -101,6 +101,10 @@ export function getConfig(): Record<string, unknown> | null {
     _cachedConfig = null;
     return null;
   }
+  // Strip UTF-8 BOM if present. PowerShell 5.1's `Set-Content -Encoding utf8`
+  // writes one by default, which would otherwise break JSON.parse with a
+  // confusing "Unexpected character" error on byte 0.
+  if (text.charCodeAt(0) === 0xfeff) text = text.slice(1);
   let data: unknown;
   try {
     data = JSON.parse(text);
