@@ -1,7 +1,7 @@
 {
   "name": "@este-systems/dsc",
   "version": "0.1.0",
-  "description": "Claude-Code-style CLI coding agent for DeepSeek",
+  "description": "CLI coding agent for DeepSeek",
   "keywords": [
     "deepseek",
     "ai",

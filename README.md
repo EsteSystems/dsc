@@ -1,6 +1,6 @@
 # dsc
 
-A Claude-Code-style CLI coding agent for [DeepSeek](https://api-docs.deepseek.com/).
+A CLI coding agent for [DeepSeek](https://api-docs.deepseek.com/).
 Streams responses, calls tools (`bash`, `read_file`, `write_file`, `edit_file`,
 `grep`, `glob`, `web_fetch`, `web_search`), keeps per-cwd sessions, and runs
 in your terminal as a plain readline REPL — output stays selectable / pasteable

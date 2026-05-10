@@ -75,7 +75,7 @@ function parseArgs(argv: string[]): Cli {
 }
 
 function printHelp() {
-  process.stdout.write(`dsc — Claude-Code-style CLI for DeepSeek
+  process.stdout.write(`dsc — CLI coding agent for DeepSeek
 
 Usage:
   dsc                       Start interactive REPL
