@@ -168,6 +168,31 @@ drafts, use `/edit`.
 within 1 second. `Ctrl+D` exits cleanly. Up / down arrows recall past
 prompts (persisted across sessions).
 
+### Session scoping (per-directory)
+
+Sessions are tied to the directory you launched dsc from — that's how
+auto-resume figures out which conversation to bring back.
+
+- Run `dsc` in `~/code/foo` → it auto-resumes the most recent session
+  whose `cwd` is `~/code/foo`. If there isn't one, you start fresh.
+- `cd` into `~/code/bar` and run `dsc` → you get bar's last session,
+  not foo's. Project conversations stay scoped to their project; you
+  can't accidentally bleed astrophysics notes into a CLI refactor.
+- `/clear` starts a brand-new session **for the current cwd**. The old
+  one stays on disk and shows up in `/list` next time you're back.
+- `/list` shows only sessions whose `cwd` matches the current
+  directory. `/resume <#>` resolves indices from that list.
+- `/resume <id>` (or a `/save`'d name) **can** cross cwds — useful
+  if you want to revisit a session from elsewhere; the cwd it was
+  born in stays attached to it.
+- `--no-resume` skips auto-resume entirely and gives you a fresh
+  session this launch.
+
+Each session is a single JSON file under
+`~/.local/share/dsc/sessions/`. Open one in your editor if you want to
+see exactly what got persisted, including any compacted summary and
+the archived messages from `/transcript`.
+
 ## Tools the agent can use
 
 | Tool | Approval | Notes |
