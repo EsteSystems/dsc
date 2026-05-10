@@ -1,5 +1,5 @@
 {
-  "name": "@este-systems/dsc",
+  "name": "@EsteSystems/dsc",
   "version": "0.1.0",
   "description": "CLI coding agent for DeepSeek",
   "keywords": [
@@ -13,13 +13,13 @@
   ],
   "author": "Este Systems <contact@este.systems>",
   "license": "MIT",
-  "homepage": "https://github.com/este-systems/dsc#readme",
+  "homepage": "https://github.com/EsteSystems/dsc#readme",
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/este-systems/dsc.git"
+    "url": "git+https://github.com/EsteSystems/dsc.git"
   },
   "bugs": {
-    "url": "https://github.com/este-systems/dsc/issues"
+    "url": "https://github.com/EsteSystems/dsc/issues"
   },
   "type": "module",
   "bin": {
