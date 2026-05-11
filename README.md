@@ -1,5 +1,10 @@
 # dsc
 
+[![npm version](https://img.shields.io/npm/v/@este.systems/dsc.svg)](https://www.npmjs.com/package/@este.systems/dsc)
+[![npm downloads](https://img.shields.io/npm/dw/@este.systems/dsc.svg)](https://www.npmjs.com/package/@este.systems/dsc)
+[![license](https://img.shields.io/npm/l/@este.systems/dsc.svg)](LICENSE)
+[![node](https://img.shields.io/node/v/@este.systems/dsc.svg)](https://nodejs.org)
+
 A CLI coding agent for [DeepSeek](https://api-docs.deepseek.com/).
 Streams responses, calls tools (`bash`, `read_file`, `write_file`, `edit_file`,
 `grep`, `glob`, `web_fetch`, `web_search`), keeps per-cwd sessions, and runs
