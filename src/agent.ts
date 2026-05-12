@@ -81,6 +81,10 @@ export interface RunOptions {
   getSummary?: () => string | undefined;
   /** Prefix shown before streamed assistant content. Defaults to "assistant:". */
   assistantLabel?: string;
+  /** How many times to auto-grant another MAX_TOOL_DEPTH budget when the
+   *  agent hits the cap without converging. 0 (default) = stop and ask the
+   *  user to type "continue" manually, preserving today's safety. */
+  maxAutoContinue?: number;
 }
 
 export async function runAgent(opts: RunOptions): Promise<void> {
@@ -106,8 +110,16 @@ export async function runAgent(opts: RunOptions): Promise<void> {
     ...repairToolCallPairing(conversationMessages()),
   ];
 
-  for (let depth = 0; depth < MAX_TOOL_DEPTH; depth++) {
-    stats.prompts += 1;
+  const maxAutoContinue = Math.max(0, Math.floor(opts.maxAutoContinue ?? 0));
+  let autoContinues = 0;
+
+  // Outer loop hands the agent another MAX_TOOL_DEPTH budget if it ran out
+  // without converging and auto-continue is enabled. The inner for-loop is
+  // the actual tool-call agent loop; it `return`s when the model produces
+  // an assistant turn with no tool_calls (the normal "I'm done" exit).
+  budgetLoop: while (true) {
+    for (let depth = 0; depth < MAX_TOOL_DEPTH; depth++) {
+      stats.prompts += 1;
     const spinner = new Spinner("thinking");
     spinner.start();
     const handlers = streamHandlers(spinner, showReasoning, assistantLabel);
@@ -196,16 +208,26 @@ export async function runAgent(opts: RunOptions): Promise<void> {
         throw throwAfter;
       }
     }
+    }
+    // Inner for-loop exited because depth hit MAX_TOOL_DEPTH (the normal
+    // "model done, no tool_calls" exit `return`s out of runAgent). Decide
+    // whether to grant another budget or stop here.
+    if (autoContinues < maxAutoContinue) {
+      autoContinues++;
+      process.stdout.write(
+        `${DIM}── auto-continue ${autoContinues}/${maxAutoContinue} (${MAX_TOOL_DEPTH * autoContinues} tool calls so far; granting another ${MAX_TOOL_DEPTH})${RESET}\n`,
+      );
+      continue budgetLoop;
+    }
+    break budgetLoop;
   }
 
-  // Out of tool-call budget. We used to call the API again with `tools:
-  // undefined` and a "no more tools, summarize" user message — but the model
-  // routinely ignored that and emitted raw tool-call markup as plain text,
-  // which printed verbatim and looked broken. Better to stop cleanly here:
-  // the conversation history is consistent, the user can ask "continue" if
-  // they want to give it another budget.
+  // Either auto-continue was off or its budget is exhausted.
+  const totalCalls = MAX_TOOL_DEPTH * (autoContinues + 1);
   process.stdout.write(
-    `${DIM}(reached MAX_TOOL_DEPTH=${MAX_TOOL_DEPTH}; stopping. Send 'continue' if you want to give the agent another budget.)${RESET}\n`,
+    autoContinues > 0
+      ? `${DIM}(stopping after ${autoContinues} auto-continue(s) at ${totalCalls} total tool calls. Send 'continue' to give the agent another budget.)${RESET}\n`
+      : `${DIM}(reached MAX_TOOL_DEPTH=${MAX_TOOL_DEPTH}; stopping. Send 'continue' to grant another budget, or set DSC_AUTO_CONTINUE=N / run /auto-continue N to do this automatically.)${RESET}\n`,
   );
   onTurn?.();
 }

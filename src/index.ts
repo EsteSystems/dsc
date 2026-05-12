@@ -104,6 +104,11 @@ REPL commands:
   /reasoning [on|off]
                  Show or hide reasoning_content streamed by thinking models
                  (toggle when no arg)
+  /auto-continue [N|off]
+                 When the agent hits MAX_TOOL_DEPTH without finishing, auto-grant
+                 up to N more budgets instead of stopping. No arg prints the
+                 current setting. Initial value comes from DSC_AUTO_CONTINUE
+                 env var; default 0 (manual continue).
   /list          List sessions in this cwd
   /save <name>   Give the current session a friendly name (used by /resume
                  and shown in /list).
@@ -140,6 +145,12 @@ Auto-compact:
   When estimated context tokens exceed DSC_AUTO_COMPACT_AT (default 50000;
   set to 0 / off / false to disable), dsc runs /compact 4 automatically
   after the current turn. Manual /compact still works regardless.
+
+Auto-continue:
+  When the agent hits MAX_TOOL_DEPTH=24 tool calls in a turn without
+  finishing, dsc stops and asks you to type 'continue' to grant another
+  budget. Set DSC_AUTO_CONTINUE=N to silently grant up to N extra budgets
+  (≈24×N more tool calls) before stopping. Same toggle via /auto-continue.
 `);
 }
 
@@ -167,6 +178,17 @@ async function main(): Promise<void> {
     return Number.isFinite(n) && n > 0 ? n : 50_000;
   })();
   const AUTO_COMPACT_KEEP = 4;
+
+  // Auto-continue: how many times to silently grant another tool-call
+  // budget when the agent hits MAX_TOOL_DEPTH without converging. 0 (default)
+  // keeps today's behavior — stop and ask the user to type 'continue'.
+  const initialAutoContinue = (() => {
+    const raw = process.env.DSC_AUTO_CONTINUE;
+    if (!raw) return 0;
+    if (raw === "0" || raw === "off" || raw === "false") return 0;
+    const n = parseInt(raw, 10);
+    return Number.isFinite(n) && n > 0 ? n : 0;
+  })();
 
   if (!hasApiKey()) {
     process.stderr.write(`${RED}No DeepSeek API key found.${RESET}\n`);
@@ -248,6 +270,7 @@ async function main(): Promise<void> {
   const statusBar = new StatusBar();
   const sessionStart = Date.now();
   let showReasoning = true;
+  let autoContinue = initialAutoContinue;
   const currentStatusLine = () =>
     formatStatus(stats, model, {
       yolo: toolCtx.yolo,
@@ -296,6 +319,7 @@ async function main(): Promise<void> {
         getStatusLine: currentStatusLine,
         getSummary: () => session.compaction?.summary,
         assistantLabel: session.assistantLabel,
+        maxAutoContinue: autoContinue,
       });
     } catch (e) {
       if ((e as Error).name === "AbortError" || pendingAbort?.signal.aborted) {
@@ -522,6 +546,26 @@ async function main(): Promise<void> {
         else showReasoning = !showReasoning; // toggle when no arg
         refreshStatus();
         process.stdout.write(`${DIM}reasoning: ${showReasoning ? "on" : "off"}${RESET}\n`);
+      } else if (cmd === "auto-continue") {
+        const trimmed = arg.trim();
+        if (!trimmed) {
+          process.stdout.write(
+            `${DIM}auto-continue: ${autoContinue === 0 ? "off" : `up to ${autoContinue} extra budget(s)`}${RESET}\n`,
+          );
+        } else if (trimmed === "off" || trimmed === "0" || trimmed === "false") {
+          autoContinue = 0;
+          process.stdout.write(`${DIM}auto-continue: off${RESET}\n`);
+        } else {
+          const n = parseInt(trimmed, 10);
+          if (!Number.isFinite(n) || n < 0) {
+            process.stdout.write(`${RED}usage: /auto-continue [N|off]${RESET}\n`);
+          } else {
+            autoContinue = n;
+            process.stdout.write(
+              `${DIM}auto-continue: ${n === 0 ? "off" : `up to ${n} extra budget(s)`}${RESET}\n`,
+            );
+          }
+        }
       } else if (cmd === "audit") {
         const sub = arg.trim();
         if (sub.startsWith("show")) {
@@ -732,6 +776,7 @@ function summarizeAuditEntry(e: Record<string, unknown>): string {
 // else chain in main()).
 const SLASH_COMMANDS: ReadonlyArray<string> = [
   "audit",
+  "auto-continue",
   "clear",
   "compact",
   "cost",

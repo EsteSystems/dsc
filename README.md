@@ -326,6 +326,7 @@ XDG variables observed: `XDG_CONFIG_HOME`, `XDG_STATE_HOME`, `XDG_DATA_HOME`.
 |---|---|---|
 | `DEEPSEEK_API_KEY` | (read from config file) | Overrides the `api_key` in `deepseek.json`. |
 | `DSC_AUTO_COMPACT_AT` | `50000` | Token threshold for auto-compact. `0`/`off`/`false` disables. |
+| `DSC_AUTO_CONTINUE` | `0` | When the agent hits the per-turn tool-call cap, auto-grant up to N extra 24-call budgets before stopping. `0`/`off`/`false` keeps the manual "type continue" prompt. |
 | `DSC_NO_AUDIT` | (off) | `1` disables the JSONL audit log. |
 | `DSC_SEARCH_PROVIDER` | (config or `ddg`) | `brave`, `tavily`, or `ddg`. |
 | `BRAVE_API_KEY` | (config) | Brave Search key. |
