@@ -68,7 +68,7 @@ export const TOOL_SCHEMAS: ToolSchema[] = [
     function: {
       name: "bash",
       description:
-        "Run a shell command (/bin/sh on Linux/macOS, cmd.exe on Windows). Output is captured and returned (truncated if very long). Long-running interactive commands are not supported.",
+        "Run a shell command. Always works regardless of OS — uses /bin/sh -c on Linux/macOS and cmd.exe /d /s /c on Windows. Pick syntax that matches the host: e.g. `ls` on Linux/macOS vs `dir` on Windows; `cat` vs `type`; `which` vs `where`; `rm` vs `del`; `mv` vs `move`. Check the cwd in the system prompt to know which platform you're on (paths starting with a drive letter like C:\\ mean Windows). Output is captured and truncated if very long. Long-running interactive commands are not supported.",
       parameters: {
         type: "object",
         properties: {
