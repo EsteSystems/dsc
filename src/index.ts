@@ -124,6 +124,8 @@ REPL commands:
   /audit [path|show [N]]
                  Default / 'path': print the JSONL audit log path.
                  'show [N]': render the last N entries inline (default 10).
+  /queue [clear] Show or clear the type-ahead queue (lines you typed while
+                 a turn was running).
   /transcript    Print the full conversation, including any messages that
                  /compact previously archived (kept on disk, not sent to
                  the API).
@@ -282,6 +284,7 @@ async function main(): Promise<void> {
       contextTokens: estimateContextTokens(messages),
       sessionSeconds: Math.floor((Date.now() - sessionStart) / 1000),
       compacted: !!session.compaction,
+      queued: promptQueue.length,
     });
   const refreshStatus = () => statusBar.render(currentStatusLine());
 
@@ -385,7 +388,33 @@ async function main(): Promise<void> {
     historySize: 1000,
     completer: completeSlashCommand,
   });
-  approval.setAsker((q) => rl.question(q));
+
+  // Approval calls rl.question — while one is pending, lines that come back
+  // are the user's y/N answer, not new prompts. The queue listener checks this
+  // flag and stays out of the way so the answer doesn't get queued.
+  let approvalActive = false;
+  approval.setAsker(async (q) => {
+    approvalActive = true;
+    try {
+      return await rl.question(q);
+    } finally {
+      approvalActive = false;
+    }
+  });
+
+  // Type-ahead queue: while a turn is running, captured 'line' events go
+  // here. The main loop drains it before reading new prompts.
+  const promptQueue: string[] = [];
+  const bufferDuringTurn = (line: string) => {
+    if (approvalActive) return;
+    const trimmed = line.trim();
+    if (!trimmed) return;
+    promptQueue.push(trimmed);
+    process.stdout.write(
+      `${DIM}(queued — ${promptQueue.length} pending)${RESET}\n`,
+    );
+    refreshStatus();
+  };
 
   // ESC interrupts the current turn — more intuitive than Ctrl+C for "stop
   // what the agent is doing right now". readline already puts stdin in raw
@@ -419,10 +448,18 @@ async function main(): Promise<void> {
 
   while (true) {
     let line: string;
-    try {
-      line = await readPromptInput(rl);
-    } catch {
-      break; // Ctrl+D
+    if (promptQueue.length) {
+      // Drain the type-ahead queue before prompting again. Show what we're
+      // about to run so the user can tell it's not a fresh prompt.
+      line = promptQueue.shift()!;
+      process.stdout.write(`${DIM}── from queue:${RESET} ${line}\n`);
+      refreshStatus();
+    } else {
+      try {
+        line = await readPromptInput(rl);
+      } catch {
+        break; // Ctrl+D
+      }
     }
     const trimmed = line.trim();
     if (!trimmed) continue;
@@ -551,6 +588,22 @@ async function main(): Promise<void> {
         else showReasoning = !showReasoning; // toggle when no arg
         refreshStatus();
         process.stdout.write(`${DIM}reasoning: ${showReasoning ? "on" : "off"}${RESET}\n`);
+      } else if (cmd === "queue") {
+        const sub = arg.trim().toLowerCase();
+        if (sub === "clear" || sub === "drop") {
+          const n = promptQueue.length;
+          promptQueue.length = 0;
+          refreshStatus();
+          process.stdout.write(`${DIM}cleared ${n} queued prompt(s)${RESET}\n`);
+        } else if (promptQueue.length === 0) {
+          process.stdout.write(`${DIM}queue is empty${RESET}\n`);
+        } else {
+          promptQueue.forEach((p, i) =>
+            process.stdout.write(
+              `${DIM}${String(i + 1).padStart(2, " ")}.${RESET} ${p}\n`,
+            ),
+          );
+        }
       } else if (cmd === "lang") {
         const text = arg.trim();
         if (!text) {
@@ -646,9 +699,13 @@ async function main(): Promise<void> {
     // Snapshot rl.history so approval y/N answers (which readline auto-adds)
     // don't leak into up-arrow recall.
     const histSnapshot = rlAny.history.slice();
+    // Listen for 'line' events while the turn runs so type-ahead lands in
+    // promptQueue instead of being lost.
+    rl.on("line", bufferDuringTurn);
     try {
       await runTurn(text);
     } finally {
+      rl.off("line", bufferDuringTurn);
       rlAny.history.length = 0;
       rlAny.history.push(...histSnapshot);
     }
@@ -806,6 +863,7 @@ const SLASH_COMMANDS: ReadonlyArray<string> = [
   "lang",
   "list",
   "model",
+  "queue",
   "quit",
   "reasoning",
   "rename",

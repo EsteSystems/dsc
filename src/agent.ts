@@ -246,6 +246,7 @@ export interface StatusOptions {
   contextTokens?: number; // current message-list size, for context-budget feel
   sessionSeconds?: number; // wall-clock since REPL start
   compacted?: boolean; // /compact has been run on this session
+  queued?: number; // type-ahead queue depth
 }
 
 export function formatStatus(stats: Stats, model: Model, opts: StatusOptions): string {
@@ -256,9 +257,11 @@ export function formatStatus(stats: Stats, model: Model, opts: StatusOptions): s
     (opts.compacted ? " compacted" : "");
   const ctx =
     opts.contextTokens !== undefined ? `  ctx:${formatCount(opts.contextTokens)}` : "";
+  const queued =
+    opts.queued && opts.queued > 0 ? `  queued:${opts.queued}` : "";
   const session =
     opts.sessionSeconds !== undefined ? `  ${formatDuration(opts.sessionSeconds)}` : "";
-  return `${model}${flags} · $${cost.toFixed(4)}  in: ${stats.prompt_tokens} (hit ${stats.cache_hit_tokens} / miss ${stats.cache_miss_tokens})  out: ${stats.completion_tokens}  tools: ${stats.tool_calls_total}${ctx}${session}`;
+  return `${model}${flags} · $${cost.toFixed(4)}  in: ${stats.prompt_tokens} (hit ${stats.cache_hit_tokens} / miss ${stats.cache_miss_tokens})  out: ${stats.completion_tokens}  tools: ${stats.tool_calls_total}${ctx}${queued}${session}`;
 }
 
 // Rough estimate based on stored message bodies; 1 token ≈ 4 chars.
