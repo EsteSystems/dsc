@@ -104,6 +104,10 @@ REPL commands:
   /reasoning [on|off]
                  Show or hide reasoning_content streamed by thinking models
                  (toggle when no arg)
+  /lang [name|off]
+                 Force the model to reply exclusively in <name> (e.g. en,
+                 ro, fr, Chinese, "formal English"). No arg prints the
+                 current setting; 'off' clears the directive.
   /auto-continue [N|off]
                  When the agent hits MAX_TOOL_DEPTH without finishing, auto-grant
                  up to N more budgets instead of stopping. No arg prints the
@@ -320,6 +324,7 @@ async function main(): Promise<void> {
         getSummary: () => session.compaction?.summary,
         assistantLabel: session.assistantLabel,
         maxAutoContinue: autoContinue,
+        language: session.language,
       });
     } catch (e) {
       if ((e as Error).name === "AbortError" || pendingAbort?.signal.aborted) {
@@ -546,6 +551,21 @@ async function main(): Promise<void> {
         else showReasoning = !showReasoning; // toggle when no arg
         refreshStatus();
         process.stdout.write(`${DIM}reasoning: ${showReasoning ? "on" : "off"}${RESET}\n`);
+      } else if (cmd === "lang") {
+        const text = arg.trim();
+        if (!text) {
+          process.stdout.write(
+            `${DIM}language: ${session.language ? `"${session.language}"` : "off (any language)"}${RESET}\n`,
+          );
+        } else if (text === "off" || text === "default" || text === "any") {
+          delete session.language;
+          await persist();
+          process.stdout.write(`${DIM}language directive cleared${RESET}\n`);
+        } else {
+          session.language = text;
+          await persist();
+          process.stdout.write(`${DIM}language → "${text}" (replies will be exclusively in this language)${RESET}\n`);
+        }
       } else if (cmd === "auto-continue") {
         const trimmed = arg.trim();
         if (!trimmed) {
@@ -783,6 +803,7 @@ const SLASH_COMMANDS: ReadonlyArray<string> = [
   "edit",
   "exit",
   "help",
+  "lang",
   "list",
   "model",
   "quit",

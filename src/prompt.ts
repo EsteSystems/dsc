@@ -31,6 +31,8 @@ export interface PromptContext {
   statusLine?: string;
   /** Cumulative summary of older turns set by /compact. */
   summary?: string;
+  /** Free-form language directive — model is told to reply only in this. */
+  language?: string;
 }
 
 /**
@@ -48,6 +50,16 @@ export function buildSystemPrompt(ctx: PromptContext): string {
     lines.push("");
     lines.push("Previously in this session (summary of compacted turns):");
     lines.push(ctx.summary);
+  }
+  if (ctx.language) {
+    lines.push("");
+    lines.push(
+      `Language directive: respond exclusively in ${ctx.language}. ` +
+        `Tool call names and arguments stay as-is (they're code), but all ` +
+        `natural-language prose — including any reasoning_content — must be ` +
+        `in ${ctx.language}. Do not switch languages even if the user writes ` +
+        `in another language.`,
+    );
   }
   return lines.join("\n");
 }

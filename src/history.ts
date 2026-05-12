@@ -49,6 +49,10 @@ interface SessionFileV2 {
   name?: string;
   /** Custom prefix shown before streamed assistant turns (default `assistant:`). */
   assistantLabel?: string;
+  /** Free-form language directive injected into the system prompt
+   *  (e.g. "en", "ro", "Romanian", "formal English"). The model is told
+   *  to reply exclusively in this language. */
+  language?: string;
 }
 
 export interface CompactionState {
@@ -80,6 +84,8 @@ export interface SessionState {
   name?: string;
   /** Custom prefix shown before streamed assistant turns (default `assistant:`). */
   assistantLabel?: string;
+  /** Force replies in a specific language (free-form). */
+  language?: string;
 }
 
 function newSessionId(): string {
@@ -147,6 +153,7 @@ export async function saveSession(state: SessionState): Promise<void> {
       : {}),
     ...(state.name ? { name: state.name } : {}),
     ...(state.assistantLabel ? { assistantLabel: state.assistantLabel } : {}),
+    ...(state.language ? { language: state.language } : {}),
   };
   const tmp = file + ".tmp";
   await fs.writeFile(tmp, JSON.stringify(data, null, 2), "utf8");
@@ -180,6 +187,7 @@ export async function loadSession(id: string): Promise<SessionState | null> {
     archivedMessages: data.archivedMessages,
     name: data.name,
     assistantLabel: data.assistantLabel,
+    language: data.language,
   };
 }
 

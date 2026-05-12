@@ -85,6 +85,8 @@ export interface RunOptions {
    *  agent hits the cap without converging. 0 (default) = stop and ask the
    *  user to type "continue" manually, preserving today's safety. */
   maxAutoContinue?: number;
+  /** Force replies in a specific language. Free-form (e.g. "en", "Romanian"). */
+  language?: string;
 }
 
 export async function runAgent(opts: RunOptions): Promise<void> {
@@ -105,6 +107,7 @@ export async function runAgent(opts: RunOptions): Promise<void> {
         date: new Date(),
         statusLine: opts.getStatusLine?.(),
         summary: opts.getSummary?.(),
+        language: opts.language,
       }),
     },
     ...repairToolCallPairing(conversationMessages()),
