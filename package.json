@@ -33,6 +33,7 @@
   ],
   "scripts": {
     "dev": "tsx src/index.ts",
+    "dev:tui": "tsx src/tui.tsx",
     "build": "tsc -p .",
     "typecheck": "tsc -p . --noEmit",
     "start": "node dist/index.js",
@@ -46,11 +47,15 @@
     "node": ">=22"
   },
   "dependencies": {
-    "diff": "^5.2.0"
+    "diff": "^5.2.0",
+    "ink": "^7.0.2",
+    "ink-text-input": "^6.0.0",
+    "react": "^19.2.6"
   },
   "devDependencies": {
     "@types/diff": "^5.2.0",
     "@types/node": "^20.0.0",
+    "@types/react": "^19.2.14",
     "tsx": "^4.7.0",
     "typescript": "^5.4.0"
   }
