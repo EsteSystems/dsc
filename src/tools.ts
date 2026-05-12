@@ -68,7 +68,7 @@ export const TOOL_SCHEMAS: ToolSchema[] = [
     function: {
       name: "bash",
       description:
-        "Run a shell command via /bin/sh. Output is captured and returned (truncated if very long). Long-running interactive commands are not supported.",
+        "Run a shell command (/bin/sh on Linux/macOS, cmd.exe on Windows). Output is captured and returned (truncated if very long). Long-running interactive commands are not supported.",
       parameters: {
         type: "object",
         properties: {
@@ -413,7 +413,10 @@ async function runBash(
     }
   }
   return new Promise<ToolResult>((resolve) => {
-    const child = spawn("/bin/sh", ["-c", command], { cwd: ctx.cwd });
+    // `shell: true` makes Node pick the platform's default: /bin/sh -c on
+    // POSIX, cmd.exe /d /s /c on Windows. Lets the same `bash` tool work
+    // across Linux/macOS/Windows without us shelling out to a hardcoded path.
+    const child = spawn(command, [], { cwd: ctx.cwd, shell: true });
     let stdout = "";
     let stderr = "";
     let timedOut = false;
@@ -468,7 +471,9 @@ async function runBash(
 let _hasRg: boolean | undefined;
 function hasRipgrep(): boolean {
   if (_hasRg !== undefined) return _hasRg;
-  const r = spawnSync("which", ["rg"], { stdio: "ignore" });
+  // POSIX has `which`, Windows has `where`. Pick the right one.
+  const lookup = process.platform === "win32" ? "where" : "which";
+  const r = spawnSync(lookup, ["rg"], { stdio: "ignore" });
   _hasRg = r.status === 0;
   return _hasRg;
 }
