@@ -23,6 +23,7 @@ import * as replHistory from "./repl_history.js";
 import * as audit from "./audit.js";
 import { compactSession } from "./compact.js";
 import { Spinner, StatusBar } from "./ui.js";
+import { formatVersionInfo } from "./version.js";
 
 const RESET = "\x1b[0m";
 const DIM = "\x1b[2m";
@@ -34,6 +35,7 @@ interface Cli {
   yolo: boolean;
   prompt?: string;
   help?: boolean;
+  version?: boolean;
   resume: boolean;
   resumeId?: string;
   modelExplicit: boolean;
@@ -64,6 +66,8 @@ function parseArgs(argv: string[]): Cli {
       out.resume = true;
     } else if (a === "--help" || a === "-h") {
       out.help = true;
+    } else if (a === "--version" || a === "-v") {
+      out.version = true;
     } else if (a.startsWith("-")) {
       throw new Error(`unknown flag: ${a}`);
     } else {
@@ -86,6 +90,7 @@ Flags:
   -y, --yolo                Skip approval prompts for write/edit/bash
       --no-resume           Start a fresh session instead of resuming
       --resume [id]         Resume a session (default: most recent for this cwd)
+  -v, --version             Print version (dsc, Node, platform/arch) and exit
   -h, --help                Show this help
 
 API key (in priority order):
@@ -126,6 +131,7 @@ REPL commands:
                  'show [N]': render the last N entries inline (default 10).
   /queue [clear] Show or clear the type-ahead queue (lines you typed while
                  a turn was running).
+  /version       Print dsc + Node + platform versions (useful for bug reports).
   /transcript    Print the full conversation, including any messages that
                  /compact previously archived (kept on disk, not sent to
                  the API).
@@ -170,6 +176,10 @@ async function main(): Promise<void> {
   }
   if (cli.help) {
     printHelp();
+    return;
+  }
+  if (cli.version) {
+    process.stdout.write(formatVersionInfo() + "\n");
     return;
   }
 
@@ -641,6 +651,8 @@ async function main(): Promise<void> {
             );
           }
         }
+      } else if (cmd === "version") {
+        process.stdout.write(`${DIM}${formatVersionInfo()}${RESET}\n`);
       } else if (cmd === "audit") {
         const sub = arg.trim();
         if (sub.startsWith("show")) {
@@ -872,6 +884,7 @@ const SLASH_COMMANDS: ReadonlyArray<string> = [
   "resume",
   "save",
   "transcript",
+  "version",
   "yolo",
 ];
 
