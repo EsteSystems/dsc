@@ -277,6 +277,9 @@ async function main(): Promise<void> {
   const sessionStart = Date.now();
   let showReasoning = true;
   let autoContinue = initialAutoContinue;
+  // Declared up here (before currentStatusLine references it) so the early
+  // refreshStatus() right after statusBar.enable doesn't hit the TDZ.
+  const promptQueue: string[] = [];
   const currentStatusLine = () =>
     formatStatus(stats, model, {
       yolo: toolCtx.yolo,
@@ -402,9 +405,8 @@ async function main(): Promise<void> {
     }
   });
 
-  // Type-ahead queue: while a turn is running, captured 'line' events go
-  // here. The main loop drains it before reading new prompts.
-  const promptQueue: string[] = [];
+  // Type-ahead queue listener: while a turn is running, captured 'line'
+  // events get pushed into promptQueue (declared earlier in this function).
   const bufferDuringTurn = (line: string) => {
     if (approvalActive) return;
     const trimmed = line.trim();
