@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 import { spawn } from "node:child_process";
 import { existsSync } from "node:fs";
-import { fileURLToPath } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
 import { dirname, join } from "node:path";
 
 // Resolve the package root from this file's location. With `npm link` the
@@ -10,14 +10,22 @@ import { dirname, join } from "node:path";
 const here = dirname(fileURLToPath(import.meta.url));
 const pkgRoot = dirname(here);
 const tsxBin = join(pkgRoot, "node_modules", ".bin", "tsx");
+const tsxBinCmd = process.platform === "win32" ? tsxBin + ".cmd" : tsxBin;
 const srcEntry = join(pkgRoot, "src", "index.ts");
 const distEntry = join(pkgRoot, "dist", "index.js");
 
-if (existsSync(tsxBin) && existsSync(srcEntry)) {
+const tsxAvailable = existsSync(tsxBin) || existsSync(tsxBinCmd);
+
+if (tsxAvailable && existsSync(srcEntry)) {
   // Dev: run TS sources directly. Live changes pick up on next launch.
-  const child = spawn(tsxBin, [srcEntry, ...process.argv.slice(2)], {
-    stdio: "inherit",
-  });
+  // On Windows, npm installs shim .cmd alongside the bare executable —
+  // spawn with shell:true so either is found, and quote argv values that
+  // might contain spaces (e.g. paths in C:\Program Files\...).
+  const child = spawn(
+    process.platform === "win32" ? tsxBinCmd : tsxBin,
+    [srcEntry, ...process.argv.slice(2)],
+    { stdio: "inherit", shell: process.platform === "win32" },
+  );
   child.on("exit", (code, signal) => {
     if (signal) process.kill(process.pid, signal);
     else process.exit(code ?? 0);
@@ -25,5 +33,10 @@ if (existsSync(tsxBin) && existsSync(srcEntry)) {
 } else {
   // Fallback: production-style install without devDeps. Use the compiled
   // output instead. Run `npm run build` to refresh `dist/`.
-  await import(distEntry);
+  //
+  // Dynamic import() requires a file:// URL on Windows (an absolute path
+  // like `C:\path\file.js` gets parsed with `c:` as a URL scheme, which
+  // fails with ERR_UNSUPPORTED_ESM_URL_SCHEME). pathToFileURL handles
+  // the conversion correctly on every platform.
+  await import(pathToFileURL(distEntry).href);
 }
