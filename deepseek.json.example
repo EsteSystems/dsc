@@ -1,0 +1,15 @@
+{
+  "api_key": "sk-REPLACE-WITH-YOUR-DEEPSEEK-API-KEY",
+
+  "search": {
+    "provider": "brave",
+
+    "brave": {
+      "api_key": "BSA-REPLACE-WITH-YOUR-BRAVE-API-KEY"
+    },
+
+    "tavily": {
+      "api_key": "tvly-REPLACE-WITH-YOUR-TAVILY-API-KEY"
+    }
+  }
+}

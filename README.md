@@ -91,8 +91,43 @@ to your `PATH` and reopen the terminal.
 
 ## API key
 
-dsc reads its DeepSeek key from a JSON config file. The default path
-depends on your platform:
+A ready-to-edit template lives at the repo root: **[`deepseek.json.example`](deepseek.json.example)**.
+Copy it to the config path below and replace the placeholder values:
+
+```sh
+# Linux / macOS:
+mkdir -p ~/.config/deepseek
+cp deepseek.json.example ~/.config/deepseek/deepseek.json
+chmod 600 ~/.config/deepseek/deepseek.json
+$EDITOR ~/.config/deepseek/deepseek.json
+```
+
+```powershell
+# Windows PowerShell:
+$dir = "$HOME\.config\deepseek"
+New-Item -ItemType Directory -Force -Path $dir | Out-Null
+Copy-Item deepseek.json.example "$dir\deepseek.json"
+notepad "$dir\deepseek.json"
+```
+
+The template's full contents:
+
+```jsonc
+{
+  "api_key": "sk-REPLACE-WITH-YOUR-DEEPSEEK-API-KEY",
+
+  "search": {
+    "provider": "brave",
+    "brave":  { "api_key": "BSA-REPLACE-WITH-YOUR-BRAVE-API-KEY" },
+    "tavily": { "api_key": "tvly-REPLACE-WITH-YOUR-TAVILY-API-KEY" }
+  }
+}
+```
+
+You only need `api_key`. The `search` block is optional — leave it out
+and `web_search` falls back to the keyless DuckDuckGo HTML scraper.
+
+dsc reads this file from a platform-dependent path:
 
 | Platform | Default path |
 |---|---|
