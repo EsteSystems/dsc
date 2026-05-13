@@ -8,5 +8,5 @@ import { MessageRow } from "./History.js";
 export function CurrentTurn() {
   const current = useStore((s) => s.current);
   if (!current) return null;
-  return <MessageRow message={current} />;
+  return <MessageRow message={current} streaming />;
 }

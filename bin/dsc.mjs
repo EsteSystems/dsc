@@ -11,8 +11,18 @@ const here = dirname(fileURLToPath(import.meta.url));
 const pkgRoot = dirname(here);
 const tsxBin = join(pkgRoot, "node_modules", ".bin", "tsx");
 const tsxBinCmd = process.platform === "win32" ? tsxBin + ".cmd" : tsxBin;
-const srcEntry = join(pkgRoot, "src", "index.ts");
-const distEntry = join(pkgRoot, "dist", "index.js");
+
+// Pick the entry. TUI (ink) is the default; `--repl` opts into the readline
+// REPL, which is also the one-shot path for `dsc "prompt"`-style scripted
+// invocations — bin can't reliably tell a positional prompt from a flag
+// value without full parsing, so we keep one-shot under --repl for now.
+const argv = process.argv.slice(2);
+const wantsRepl = argv.includes("--repl");
+const filteredArgv = argv.filter((a) => a !== "--repl");
+
+const entryName = wantsRepl ? "index" : "tui";
+const srcEntry = join(pkgRoot, "src", wantsRepl ? "index.ts" : "tui.tsx");
+const distEntry = join(pkgRoot, "dist", `${entryName}.js`);
 
 const tsxAvailable = existsSync(tsxBin) || existsSync(tsxBinCmd);
 
@@ -23,7 +33,7 @@ if (tsxAvailable && existsSync(srcEntry)) {
   // might contain spaces (e.g. paths in C:\Program Files\...).
   const child = spawn(
     process.platform === "win32" ? tsxBinCmd : tsxBin,
-    [srcEntry, ...process.argv.slice(2)],
+    [srcEntry, ...filteredArgv],
     { stdio: "inherit", shell: process.platform === "win32" },
   );
   child.on("exit", (code, signal) => {

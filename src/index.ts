@@ -1,10 +1,7 @@
 import * as readline from "node:readline/promises";
 import { stdin as input, stdout as output } from "node:process";
-import { spawnSync } from "node:child_process";
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { promises as fsp } from "node:fs";
-import * as os from "node:os";
-import * as path from "node:path";
+import { openEditor } from "./editor.js";
 import {
   AVAILABLE_MODELS,
   DEFAULT_MODEL,
@@ -967,27 +964,6 @@ async function readPromptInput(rl: readline.Interface): Promise<string> {
  * Empty/whitespace-only results are returned as "" so the caller can decide
  * whether to skip the turn.
  */
-function openEditor(initial: string): string | null {
-  const editor = process.env.VISUAL || process.env.EDITOR || "vi";
-  const tmpDir = mkdtempSync(path.join(os.tmpdir(), "dsc-edit-"));
-  const tmpFile = path.join(tmpDir, "prompt.md");
-  try {
-    writeFileSync(tmpFile, initial, "utf8");
-    const r = spawnSync(editor, [tmpFile], { stdio: "inherit" });
-    if (r.error) return null;
-    const content = readFileSync(tmpFile, "utf8");
-    return content.replace(/\n+$/, "");
-  } catch {
-    return null;
-  } finally {
-    try {
-      rmSync(tmpDir, { recursive: true, force: true });
-    } catch {
-      // best-effort
-    }
-  }
-}
-
 main().catch((e) => {
   process.stderr.write(`${RED}fatal: ${(e as Error).message}${RESET}\n`);
   process.exit(1);

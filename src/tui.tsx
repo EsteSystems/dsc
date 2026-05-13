@@ -5,7 +5,7 @@
 // ApprovalDialog component.
 
 import React from "react";
-import { render } from "ink";
+import { render, type Instance } from "ink";
 import { App } from "./tui/App.js";
 import { getState, setState } from "./store.js";
 import type { UIMessage } from "./store.js";
@@ -34,6 +34,7 @@ import * as audit from "./audit.js";
 import { promises as fsp } from "node:fs";
 import { compactSession } from "./compact.js";
 import { formatVersionInfo } from "./version.js";
+import { openEditor } from "./editor.js";
 
 const AUTO_COMPACT_AT_TOKENS = Number(process.env.DSC_AUTO_COMPACT ?? "0") || 0;
 const AUTO_COMPACT_KEEP = Number(process.env.DSC_AUTO_COMPACT_KEEP ?? "4") || 4;
@@ -214,7 +215,7 @@ async function main() {
         return next;
       });
     },
-    onToolStart: (callId, name, args) => {
+    onToolStart: (_callId, name, args) => {
       setState({ task: `${name}(${truncate(args, 80)})` });
     },
     onToolEnd: (callId, name, content, rejected) => {
@@ -316,6 +317,16 @@ async function main() {
     } finally {
       draining = false;
     }
+  };
+
+  // Forward declarations so handleSlash can reference the ink instance and
+  // remount helper for /edit (which unmounts ink, runs $EDITOR, remounts).
+  // These get assigned just before the first render at the bottom of main().
+  let inkInstance: Instance | null = null;
+  const mountApp = () => {
+    inkInstance = render(
+      <App onSubmit={handleSubmit} onAbort={handleAbort} />,
+    );
   };
 
   // Push a one-line dim system notice into history (used for slash-command
@@ -661,6 +672,26 @@ async function main() {
         await runCompaction(keep, false);
         return true;
       }
+      case "edit": {
+        // ink owns the terminal — unmount before spawning $EDITOR so the
+        // editor gets a clean screen. We also clear `history` before the
+        // unmount, otherwise the freshly-rendered <Static> after remount
+        // would emit all prior turns to scrollback a second time. The
+        // already-printed scrollback above stays untouched.
+        const initial = arg ? arg + "\n" : "";
+        setState({ history: [] });
+        inkInstance?.unmount();
+        const draft = openEditor(initial);
+        mountApp();
+        if (draft === null) {
+          info("error: editor failed");
+        } else if (!draft.trim()) {
+          info("(empty draft, not sent)");
+        } else {
+          handleSubmit(draft);
+        }
+        return true;
+      }
       default:
         info(`error: unknown command: /${cmd}`);
         return true;
@@ -677,7 +708,13 @@ async function main() {
     void drain();
   };
 
-  render(<App onSubmit={handleSubmit} />);
+  const handleAbort = () => {
+    if (pendingAbort && !pendingAbort.signal.aborted) {
+      pendingAbort.abort();
+    }
+  };
+
+  mountApp();
 }
 
 function truncate(s: string, n: number): string {

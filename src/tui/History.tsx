@@ -2,6 +2,7 @@ import React from "react";
 import { Box, Static, Text } from "ink";
 import type { UIMessage } from "../store.js";
 import { useStore } from "./useStore.js";
+import { Markdown } from "./Markdown.js";
 
 // Finalized messages pushed into <Static> render exactly once each, then
 // scroll into terminal scrollback like any normal stdout output — meaning
@@ -15,7 +16,15 @@ export function History() {
   );
 }
 
-export function MessageRow({ message: m }: { message: UIMessage }) {
+interface MessageRowProps {
+  message: UIMessage;
+  /** Skip markdown parsing for the currently-streaming message — re-parsing
+   *  on every chunk would burn CPU and cause flicker. The streamed text
+   *  shows raw; once it moves to <Static> it gets the rich rendering. */
+  streaming?: boolean;
+}
+
+export function MessageRow({ message: m, streaming = false }: MessageRowProps) {
   if (m.role === "tool") {
     const label = m.tool_name ? `← ${m.tool_name}` : "← tool";
     return (
@@ -40,6 +49,7 @@ export function MessageRow({ message: m }: { message: UIMessage }) {
     );
   }
   const labelColor = m.role === "user" ? "cyan" : "magenta";
+  const renderRich = m.role === "assistant" && !streaming && !!m.content;
   return (
     <Box flexDirection="column" marginBottom={1}>
       <Text bold color={labelColor}>
@@ -50,7 +60,11 @@ export function MessageRow({ message: m }: { message: UIMessage }) {
           {m.reasoning}
         </Text>
       ) : null}
-      {m.content ? <Text>{m.content}</Text> : null}
+      {renderRich ? (
+        <Markdown source={m.content} />
+      ) : m.content ? (
+        <Text>{m.content}</Text>
+      ) : null}
     </Box>
   );
 }
