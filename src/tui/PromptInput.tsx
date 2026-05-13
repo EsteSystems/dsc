@@ -1,13 +1,15 @@
 import React, { useState } from "react";
 import { Box, Text, useInput } from "ink";
-import TextInput from "ink-text-input";
+import { Input } from "./Input.js";
 import { useStore } from "./useStore.js";
 
 interface Props {
   onSubmit: (text: string) => void;
+  /** Past submissions for arrow-up recall, oldest-first. */
+  history?: string[];
 }
 
-export function PromptInput({ onSubmit }: Props) {
+export function PromptInput({ onSubmit, history }: Props) {
   const busy = useStore((s) => s.busy);
   const approval = useStore((s) => s.approval);
   const [value, setValue] = useState("");
@@ -72,11 +74,12 @@ export function PromptInput({ onSubmit }: Props) {
         <Text bold color={promptColor}>
           {promptChar}
         </Text>
-        <TextInput
+        <Input
           value={value}
           onChange={setValue}
           onSubmit={handleSubmit}
           focus={!blocked}
+          history={history}
         />
       </Box>
     </Box>

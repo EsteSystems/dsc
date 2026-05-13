@@ -2,6 +2,7 @@ import * as readline from "node:readline/promises";
 import { stdin as input, stdout as output } from "node:process";
 import { promises as fsp } from "node:fs";
 import { openEditor } from "./editor.js";
+import { completeSlash } from "./slash.js";
 import {
   AVAILABLE_MODELS,
   DEFAULT_MODEL,
@@ -861,39 +862,10 @@ function summarizeAuditEntry(e: Record<string, unknown>): string {
 // Slash commands the REPL recognizes. Used both for tab completion and as
 // a single source of truth for what's accepted (kept in sync with the if/
 // else chain in main()).
-const SLASH_COMMANDS: ReadonlyArray<string> = [
-  "audit",
-  "auto-continue",
-  "clear",
-  "compact",
-  "cost",
-  "edit",
-  "exit",
-  "help",
-  "lang",
-  "list",
-  "model",
-  "queue",
-  "quit",
-  "reasoning",
-  "rename",
-  "resume",
-  "save",
-  "transcript",
-  "version",
-  "yolo",
-];
-
-// readline-style completer: returns [matches, substringMatched]. We complete
-// the slash-command name only; subcommand args (e.g. /resume <name>) are not
-// completed yet — keep it simple and predictable.
+// readline-style completer: returns [matches, substringMatched]. Backs into
+// the shared completeSlash helper so the REPL and TUI complete the same set.
 function completeSlashCommand(line: string): [string[], string] {
-  if (!line.startsWith("/")) return [[], line];
-  const partial = line.slice(1);
-  if (partial.includes(" ")) return [[], line]; // past the command word
-  const matches = SLASH_COMMANDS.filter((c) => c.startsWith(partial)).map(
-    (c) => "/" + c,
-  );
+  const { matches } = completeSlash(line);
   return [matches, line];
 }
 

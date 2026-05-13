@@ -5,8 +5,19 @@ import type { ToolSchema } from "./api.js";
 import { confirmBash, confirmEdit, confirmFetch, confirmWrite } from "./approval.js";
 import * as audit from "./audit.js";
 import { search as runSearchProvider, formatResults, getProvider, SearchError } from "./search.js";
+import { getState, setState, type AgentTask } from "./store.js";
 
-export const READ_ONLY_TOOLS = new Set(["read_file", "grep", "glob", "web_search"]);
+export const READ_ONLY_TOOLS = new Set([
+  "read_file",
+  "grep",
+  "glob",
+  "web_search",
+  // task_* mutate the in-memory task list, not the filesystem — no approval
+  // needed and we don't want them blocking on confirm prompts.
+  "task_create",
+  "task_update",
+  "task_list",
+]);
 
 export const TOOL_SCHEMAS: ToolSchema[] = [
   {
@@ -157,6 +168,64 @@ export const TOOL_SCHEMAS: ToolSchema[] = [
       },
     },
   },
+  {
+    type: "function",
+    function: {
+      name: "task_create",
+      description:
+        "Create a pending task in the user-visible task list. Use this when planning a multi-step task so the user can see progress. Returns the new task's id. Don't bother for trivial single-step tasks.",
+      parameters: {
+        type: "object",
+        properties: {
+          subject: {
+            type: "string",
+            description:
+              "Short imperative title, e.g. 'Add ESC abort to the TUI'.",
+          },
+          activeForm: {
+            type: "string",
+            description:
+              "Optional present-continuous form shown while in_progress, e.g. 'Adding ESC abort'.",
+          },
+        },
+        required: ["subject"],
+      },
+    },
+  },
+  {
+    type: "function",
+    function: {
+      name: "task_update",
+      description:
+        "Update a task by id. Set status to 'in_progress' before starting the work, 'completed' when done. You can also rewrite subject/activeForm.",
+      parameters: {
+        type: "object",
+        properties: {
+          id: { type: "string", description: "Task id returned by task_create." },
+          status: {
+            type: "string",
+            enum: ["pending", "in_progress", "completed"],
+            description: "New status.",
+          },
+          subject: { type: "string", description: "Replace the subject." },
+          activeForm: {
+            type: "string",
+            description: "Replace the activeForm string.",
+          },
+        },
+        required: ["id"],
+      },
+    },
+  },
+  {
+    type: "function",
+    function: {
+      name: "task_list",
+      description:
+        "Return the current task list with statuses, one per line.",
+      parameters: { type: "object", properties: {} },
+    },
+  },
 ];
 
 export interface ToolContext {
@@ -234,6 +303,15 @@ export async function executeTool(
       break;
     case "web_search":
       result = await runWebSearch(args, signal);
+      break;
+    case "task_create":
+      result = taskCreate(args);
+      break;
+    case "task_update":
+      result = taskUpdate(args);
+      break;
+    case "task_list":
+      result = taskList();
       break;
     default:
       result = { content: `error: unknown tool '${name}'`, audit: { error: "unknown_tool" } };
@@ -708,4 +786,80 @@ async function runWebSearch(
       audit: { provider, query: query.slice(0, 200), error: "search_failed" },
     };
   }
+}
+
+// --- Agent task list -------------------------------------------------------
+//
+// task_create / task_update / task_list are agent-bookkeeping tools that
+// mutate the in-memory store. The TUI's AgentTaskList component subscribes
+// to the store and renders pending/in-progress/completed bullets above the
+// prompt. In REPL mode the list isn't rendered, but the tools still work —
+// the agent can still call task_list to recall what it planned.
+
+let nextTaskId = 1;
+
+function taskCreate(args: Record<string, unknown>): ToolResult {
+  const subject = typeof args.subject === "string" ? args.subject.trim() : "";
+  if (!subject) {
+    return { content: "error: subject is required", audit: { error: "missing_subject" } };
+  }
+  const activeForm = typeof args.activeForm === "string" ? args.activeForm : undefined;
+  const id = String(nextTaskId++);
+  const t: AgentTask = { id, subject, status: "pending", activeForm };
+  setState((s) => ({ agentTasks: [...s.agentTasks, t] }));
+  return {
+    content: `ok: created task ${id} (${subject})`,
+    audit: { task_id: id, subject, status: "pending" },
+  };
+}
+
+function taskUpdate(args: Record<string, unknown>): ToolResult {
+  const id = typeof args.id === "string" ? args.id : String(args.id ?? "");
+  if (!id) return { content: "error: id is required", audit: { error: "missing_id" } };
+  const state = getState();
+  const idx = state.agentTasks.findIndex((t) => t.id === id);
+  if (idx === -1) {
+    return { content: `error: no task with id ${id}`, audit: { error: "not_found", id } };
+  }
+  const cur = state.agentTasks[idx];
+  const next: AgentTask = { ...cur };
+  if (typeof args.subject === "string" && args.subject.trim()) {
+    next.subject = args.subject.trim();
+  }
+  if (typeof args.activeForm === "string") {
+    next.activeForm = args.activeForm;
+  }
+  if (typeof args.status === "string") {
+    if (args.status === "pending" || args.status === "in_progress" || args.status === "completed") {
+      next.status = args.status;
+    } else {
+      return {
+        content: `error: invalid status '${args.status}' (must be pending|in_progress|completed)`,
+        audit: { error: "invalid_status", id, status: args.status },
+      };
+    }
+  }
+  setState((s) => {
+    const arr = s.agentTasks.slice();
+    arr[idx] = next;
+    return { agentTasks: arr };
+  });
+  return {
+    content: `ok: task ${id} → ${next.status} (${next.subject})`,
+    audit: { task_id: id, status: next.status, subject: next.subject },
+  };
+}
+
+function taskList(): ToolResult {
+  const tasks = getState().agentTasks;
+  if (tasks.length === 0) {
+    return { content: "(no tasks)", audit: { count: 0 } };
+  }
+  const lines = tasks.map(
+    (t) => `${t.id}. [${t.status}] ${t.subject}`,
+  );
+  return {
+    content: lines.join("\n"),
+    audit: { count: tasks.length },
+  };
 }

@@ -30,6 +30,7 @@ import type { ToolContext } from "./tools.js";
 import * as history from "./history.js";
 import * as approval from "./approval.js";
 import * as audit from "./audit.js";
+import * as replHistory from "./repl_history.js";
 import { promises as fsp } from "node:fs";
 import { compactSession } from "./compact.js";
 import { formatVersionInfo } from "./version.js";
@@ -307,13 +308,21 @@ async function main() {
     }
   };
 
+  // Persisted REPL history — both REPL and TUI share this on-disk file so
+  // arrow-up recall works across sessions and across the two front-ends.
+  const promptHistory = await replHistory.load();
+
   // Forward declarations so handleSlash can reference the ink instance and
   // remount helper for /edit (which unmounts ink, runs $EDITOR, remounts).
   // These get assigned just before the first render at the bottom of main().
   let inkInstance: Instance | null = null;
   const mountApp = () => {
     inkInstance = render(
-      <App onSubmit={handleSubmit} onAbort={handleAbort} />,
+      <App
+        onSubmit={handleSubmit}
+        onAbort={handleAbort}
+        history={promptHistory}
+      />,
     );
   };
 
@@ -687,6 +696,12 @@ async function main() {
   };
 
   const handleSubmit = (text: string) => {
+    // Persist every submitted line — slash commands included, since
+    // recalling "/resume 3" via arrow-up is useful.
+    if (text.trim()) {
+      promptHistory.push(text);
+      void replHistory.append(text);
+    }
     if (text.startsWith("/")) {
       void handleSlash(text);
       return;

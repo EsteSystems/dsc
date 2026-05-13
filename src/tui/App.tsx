@@ -6,23 +6,27 @@ import { TaskLine } from "./TaskLine.js";
 import { ApprovalDialog } from "./ApprovalDialog.js";
 import { StatusBar } from "./StatusBar.js";
 import { PromptInput } from "./PromptInput.js";
+import { AgentTaskList } from "./AgentTaskList.js";
 import { useStore } from "./useStore.js";
 
 interface AppProps {
   onSubmit: (text: string) => void;
   /** Aborts the in-flight agent turn. Called on ESC when busy. */
   onAbort: () => void;
+  /** Past submissions, oldest-first; for arrow-up history recall. */
+  history?: string[];
 }
 
-export function App({ onSubmit, onAbort }: AppProps) {
+export function App({ onSubmit, onAbort, history }: AppProps) {
   return (
     <Box flexDirection="column">
       <History />
       <CurrentTurn />
+      <AgentTaskList />
       <TaskLine />
       <ApprovalDialog />
       <KeyHandlers onAbort={onAbort} />
-      <PromptInput onSubmit={onSubmit} />
+      <PromptInput onSubmit={onSubmit} history={history} />
       <StatusBar />
     </Box>
   );

@@ -21,6 +21,14 @@ export interface ApprovalRequest {
   resolve: (answer: string) => void;
 }
 
+export interface AgentTask {
+  id: string;
+  subject: string;
+  status: "pending" | "in_progress" | "completed";
+  /** Present-continuous form, shown while in_progress. Falls back to subject. */
+  activeForm?: string;
+}
+
 export interface StoreState {
   // Finalized turns. Pushed into <Static> so they live in scrollback.
   history: UIMessage[];
@@ -31,6 +39,9 @@ export interface StoreState {
   task: string | null;
   // Pending approval request — when non-null, the ApprovalDialog mounts.
   approval: ApprovalRequest | null;
+  // Agent-managed task list (Claude Code style). Mutated by the task_*
+  // tools; rendered by AgentTaskList above the prompt.
+  agentTasks: AgentTask[];
 
   // Status-bar inputs.
   model: Model;
@@ -57,6 +68,7 @@ let state: StoreState = {
   current: null,
   task: null,
   approval: null,
+  agentTasks: [],
   model: "deepseek-v4-pro",
   yolo: false,
   reasoning: true,
