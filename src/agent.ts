@@ -138,9 +138,6 @@ export interface RunOptions {
   signal?: AbortSignal;
   onTurn?: () => void; // called after each API response so the caller can refresh the status bar
   showReasoning?: boolean; // default true
-  /** Returns the line that gets embedded into the system prompt. Called fresh
-   *  before every chatStream so the model sees the latest cost/ctx numbers. */
-  getStatusLine?: () => string;
   /** Returns the current /compact summary (folded into the system prompt).
    *  Refreshed per call so re-running /compact takes effect immediately. */
   getSummary?: () => string | undefined;
@@ -163,7 +160,9 @@ export async function runAgent(opts: RunOptions): Promise<void> {
 
   // Build the message list to send: drop any leading system entry the caller
   // may have stashed (e.g. from an older session) and prepend a freshly-built
-  // one so cwd/date/status reflect the current turn.
+  // one so cwd/date/summary/language reflect the current turn. The system
+  // prompt is intentionally byte-stable within a session so DeepSeek's
+  // prefix cache extends through it and into the message history.
   const conversationMessages = (): Message[] =>
     messages[0]?.role === "system" ? messages.slice(1) : messages.slice();
   const buildApi = (): Message[] => [
@@ -172,7 +171,6 @@ export async function runAgent(opts: RunOptions): Promise<void> {
       content: buildSystemPrompt({
         cwd: toolCtx.cwd,
         date: new Date(),
-        statusLine: opts.getStatusLine?.(),
         summary: opts.getSummary?.(),
         language: opts.language,
       }),

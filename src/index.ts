@@ -333,7 +333,6 @@ async function main(): Promise<void> {
           void persist();
         },
         showReasoning,
-        getStatusLine: currentStatusLine,
         getSummary: () => session.compaction?.summary,
         assistantLabel: session.assistantLabel,
         maxAutoContinue: autoContinue,

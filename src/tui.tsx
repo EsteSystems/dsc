@@ -23,7 +23,6 @@ import {
 import {
   runAgent,
   formatCost,
-  formatStatus,
   estimateContextTokens,
 } from "./agent.js";
 import type { AgentEvents } from "./agent.js";
@@ -99,16 +98,6 @@ async function main() {
 
   const sessionStart = Date.now();
   const promptQueue: string[] = [];
-
-  const currentStatusLine = () =>
-    formatStatus(stats, model, {
-      yolo: toolCtx.yolo,
-      reasoning: getState().reasoning,
-      contextTokens: estimateContextTokens(messages),
-      sessionSeconds: Math.floor((Date.now() - sessionStart) / 1000),
-      compacted: !!session.compaction,
-      queued: promptQueue.length,
-    });
 
   // Push the freshly-computed numbers into the store; StatusBar reads from
   // there. Called after every onTurn and once per second for the timer.
@@ -269,7 +258,6 @@ async function main() {
           void persist();
         },
         showReasoning: getState().reasoning,
-        getStatusLine: currentStatusLine,
         getSummary: () => session.compaction?.summary,
         assistantLabel: session.assistantLabel,
         maxAutoContinue: getState().autoContinue,

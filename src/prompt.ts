@@ -28,8 +28,6 @@ Rules:
 export interface PromptContext {
   cwd: string;
   date: Date;
-  /** Pre-formatted status line (model · cost · tokens · ctx · session). */
-  statusLine?: string;
   /** Cumulative summary of older turns set by /compact. */
   summary?: string;
   /** Free-form language directive — model is told to reply only in this. */
@@ -38,15 +36,19 @@ export interface PromptContext {
 
 /**
  * Returns the static system prompt followed by a small dynamic block with the
- * cwd, date, status line, and (when /compact has been run) a summary of older
- * turns. Static text comes first so the prefix-cache prefix stays stable; only
- * the trailing bytes vary per turn.
+ * cwd, date, and (when /compact has been run) a summary of older turns.
+ *
+ * We deliberately keep this byte-stable across turns within a single day +
+ * cwd, so DeepSeek's prompt-prefix cache extends past the system prompt and
+ * into the message history. Anything that ticks per-turn (cost, token counts,
+ * session timer) is shown in the user-facing status bar instead — the model
+ * doesn't need it, and embedding it here busts the cache for every message
+ * that came before, billing the entire conversation tail at miss rate.
  */
 export function buildSystemPrompt(ctx: PromptContext): string {
   const lines: string[] = [SYSTEM_PROMPT, "", "Current context:"];
   lines.push(`- cwd: ${ctx.cwd}`);
   lines.push(`- date: ${ctx.date.toISOString().slice(0, 10)}`);
-  if (ctx.statusLine) lines.push(`- status: ${ctx.statusLine}`);
   if (ctx.summary) {
     lines.push("");
     lines.push("Previously in this session (summary of compacted turns):");
