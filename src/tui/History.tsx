@@ -48,11 +48,28 @@ export function MessageRow({ message: m, streaming = false }: MessageRowProps) {
       </Box>
     );
   }
-  const labelColor = m.role === "user" ? "cyan" : "magenta";
+  if (m.role === "user") {
+    // Highlight the prompt with a subtly different background — no role
+    // label, no header. Each physical line is its own Text so the bg color
+    // paints behind every line independently (a single Text containing
+    // newlines doesn't keep the bg across the break in most terminals).
+    const lines = m.content.split("\n");
+    return (
+      <Box flexDirection="column" marginBottom={1}>
+        {lines.map((line, i) => (
+          <Text key={i} backgroundColor="blackBright">
+            {" "}
+            {line}
+            {" "}
+          </Text>
+        ))}
+      </Box>
+    );
+  }
   const renderRich = m.role === "assistant" && !streaming && !!m.content;
   return (
     <Box flexDirection="column" marginBottom={1}>
-      <Text bold color={labelColor}>
+      <Text bold color="magenta">
         {m.role}
       </Text>
       {m.reasoning ? (
