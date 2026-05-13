@@ -26,8 +26,20 @@ export function MessageRow({ message: m }: { message: UIMessage }) {
       </Box>
     );
   }
-  const labelColor =
-    m.role === "user" ? "cyan" : m.role === "system" ? "red" : "magenta";
+  if (m.role === "system") {
+    // Errors get red; everything else (slash-command output, notices) goes
+    // dim so it reads like the REPL's status/info lines rather than a bold
+    // header.
+    const isError = /^(error|API error|\(interrupted)/i.test(m.content);
+    return (
+      <Box marginBottom={1}>
+        <Text color={isError ? "red" : undefined} dimColor={!isError}>
+          {m.content}
+        </Text>
+      </Box>
+    );
+  }
+  const labelColor = m.role === "user" ? "cyan" : "magenta";
   return (
     <Box flexDirection="column" marginBottom={1}>
       <Text bold color={labelColor}>

@@ -25,9 +25,13 @@ export function StatusBar() {
     (s.yolo ? " yolo" : "") +
     (!s.reasoning ? " no-reasoning" : "") +
     (s.compacted ? " compacted" : "");
+  const cache =
+    s.cacheHitTokens > 0 || s.cacheMissTokens > 0
+      ? ` (h:${formatCount(s.cacheHitTokens)} m:${formatCount(s.cacheMissTokens)})`
+      : "";
   const left =
     `${s.model}${flags} · $${s.cost.toFixed(4)}  ` +
-    `▲${formatCount(s.inTokens)} ▼${formatCount(s.outTokens)}  ` +
+    `▲${formatCount(s.inTokens)}${cache} ▼${formatCount(s.outTokens)}  ` +
     `ctx:${formatCount(s.contextTokens)}` +
     (s.queueDepth > 0 ? `  queued:${s.queueDepth}` : "");
   const right = s.busy
@@ -37,13 +41,15 @@ export function StatusBar() {
     : formatDuration(s.sessionSeconds);
 
   // Pad left + right to fill terminal width so the reverse-video block
-  // spans edge-to-edge. Truncate left if needed.
-  const totalSpace = Math.max(2, width - 1);
+  // spans edge-to-edge without wrapping. The rendered line is framed by a
+  // single leading + trailing space, so subtract 2 from `width` to leave
+  // room for them.
+  const inner = Math.max(0, width - 2);
   const rightLen = right.length;
-  const leftMax = totalSpace - rightLen - 2;
+  const leftMax = Math.max(0, inner - rightLen - 1);
   const leftClipped =
     left.length > leftMax ? left.slice(0, Math.max(0, leftMax - 1)) + "…" : left;
-  const padCount = Math.max(1, totalSpace - leftClipped.length - rightLen);
+  const padCount = Math.max(1, inner - leftClipped.length - rightLen);
   const line = ` ${leftClipped}${" ".repeat(padCount)}${right} `;
 
   return (

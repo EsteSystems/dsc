@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto";
 import {
   chatStream,
   computeCostUsd,
@@ -5,11 +6,40 @@ import {
   type Message,
   type Model,
   type Stats,
+  type ToolCall,
 } from "./api.js";
 import { READ_ONLY_TOOLS, TOOL_SCHEMAS, executeTool, type ToolContext } from "./tools.js";
 import { Spinner } from "./ui.js";
 import { MarkdownRenderer } from "./markdown.js";
 import { buildSystemPrompt } from "./prompt.js";
+
+/**
+ * Structured events emitted by runAgent. When events is provided on RunOptions,
+ * the agent skips its terminal-friendly stdout writes (assistant label, dim
+ * reasoning header, "→ name(args)" tool lines, notices) and emits these
+ * events instead — so a non-stdout UI like the ink TUI can render them.
+ *
+ * The REPL leaves events undefined and gets the existing stdout behavior.
+ */
+export interface AgentEvents {
+  /** Called once per assistant turn before any streaming begins. */
+  onAssistantStart: (turnId: string) => void;
+  /** Streamed assistant content chunk. */
+  onAssistantContent: (turnId: string, chunk: string) => void;
+  /** Streamed assistant reasoning chunk. Caller may ignore if reasoning hidden. */
+  onAssistantReasoning: (turnId: string, chunk: string) => void;
+  /** Called once when the assistant message is finalized (content + reasoning + tool_calls). */
+  onAssistantFinal: (
+    turnId: string,
+    msg: { content: string; reasoning?: string; tool_calls?: ToolCall[] },
+  ) => void;
+  /** A tool call has started executing. */
+  onToolStart: (callId: string, name: string, args: string) => void;
+  /** A tool call has finished (or was rejected/interrupted). */
+  onToolEnd: (callId: string, name: string, content: string, rejected: boolean) => void;
+  /** System notice (auto-continue, budget exhausted). */
+  onNotice: (text: string) => void;
+}
 
 // How many tool calls we let the agent chain in one user turn before we stop
 // it. Set high enough that real coding tasks (read several files, search, run
@@ -23,7 +53,42 @@ const ITALIC = "\x1b[3m";
 const RED = "\x1b[31m";
 const RESET = "\x1b[0m";
 
-function streamHandlers(spinner: Spinner, showReasoning: boolean, assistantLabel: string) {
+function streamHandlers(
+  spinner: Spinner,
+  showReasoning: boolean,
+  assistantLabel: string,
+  events: AgentEvents | undefined,
+  turnId: string,
+) {
+  // Event-based path: emit structured events; do not touch stdout.
+  if (events) {
+    let started = false;
+    return {
+      onContent: (text: string) => {
+        spinner.bump();
+        if (!started) {
+          events.onAssistantStart(turnId);
+          started = true;
+        }
+        events.onAssistantContent(turnId, text);
+      },
+      onReasoning: (text: string) => {
+        spinner.bump();
+        if (!showReasoning) return;
+        if (!started) {
+          events.onAssistantStart(turnId);
+          started = true;
+        }
+        events.onAssistantReasoning(turnId, text);
+      },
+      flush: () => {
+        // Finalization is signaled by onAssistantFinal from runAgent — there's
+        // no "flush at end of stream" event needed for the events path.
+      },
+    };
+  }
+
+  // Stdout path (REPL): existing terminal-rendering behavior.
   let contentStarted = false;
   let reasoningStarted = false;
   const renderer = new MarkdownRenderer();
@@ -87,10 +152,12 @@ export interface RunOptions {
   maxAutoContinue?: number;
   /** Force replies in a specific language. Free-form (e.g. "en", "Romanian"). */
   language?: string;
+  /** When provided, agent emits structured events instead of writing to stdout. */
+  events?: AgentEvents;
 }
 
 export async function runAgent(opts: RunOptions): Promise<void> {
-  const { messages, model, stats, toolCtx, signal, onTurn } = opts;
+  const { messages, model, stats, toolCtx, signal, onTurn, events } = opts;
   const showReasoning = opts.showReasoning ?? true;
   const assistantLabel = opts.assistantLabel ?? "assistant:";
 
@@ -124,8 +191,11 @@ export async function runAgent(opts: RunOptions): Promise<void> {
     for (let depth = 0; depth < MAX_TOOL_DEPTH; depth++) {
       stats.prompts += 1;
     const spinner = new Spinner("thinking");
-    spinner.start();
-    const handlers = streamHandlers(spinner, showReasoning, assistantLabel);
+    // In events mode, the TUI shows its own busy indicator; avoid the
+    // terminal-control codes the spinner emits.
+    if (!events) spinner.start();
+    const turnId = randomUUID();
+    const handlers = streamHandlers(spinner, showReasoning, assistantLabel, events, turnId);
     let resp;
     try {
       resp = await chatStream({
@@ -150,6 +220,11 @@ export async function runAgent(opts: RunOptions): Promise<void> {
     if (msg.reasoning_content) assistantMsg.reasoning_content = msg.reasoning_content;
     if (msg.tool_calls && msg.tool_calls.length) assistantMsg.tool_calls = msg.tool_calls;
     messages.push(assistantMsg);
+    events?.onAssistantFinal(turnId, {
+      content,
+      reasoning: msg.reasoning_content,
+      tool_calls: msg.tool_calls,
+    });
     onTurn?.(); // status reflects the just-pushed assistant message
 
     if (!msg.tool_calls || msg.tool_calls.length === 0) {
@@ -161,14 +236,18 @@ export async function runAgent(opts: RunOptions): Promise<void> {
       const call = toolCalls[i];
       const name = call.function.name;
       const argsRaw = call.function.arguments ?? "{}";
-      process.stdout.write(`${DIM}→ ${name}(${truncate(argsRaw, 200)})${RESET}\n`);
+      if (events) {
+        events.onToolStart(call.id, name, argsRaw);
+      } else {
+        process.stdout.write(`${DIM}→ ${name}(${truncate(argsRaw, 200)})${RESET}\n`);
+      }
       stats.tool_calls_total += 1;
       stats.tool_calls_by_name[name] = (stats.tool_calls_by_name[name] ?? 0) + 1;
 
       const toolSpinner = new Spinner(`running ${name}`);
       // Don't spin tools that need approval (interactive prompt).
       const interactive = !READ_ONLY_TOOLS.has(name) && !toolCtx.yolo;
-      if (!interactive) toolSpinner.start();
+      if (!interactive && !events) toolSpinner.start();
       let result: { content: string; rejected?: boolean };
       let throwAfter: unknown = null;
       try {
@@ -195,8 +274,12 @@ export async function runAgent(opts: RunOptions): Promise<void> {
         content: result.content,
       });
       onTurn?.(); // status reflects the tool result we just recorded
-      const lead = result.content.startsWith("error:") || result.rejected ? RED : DIM;
-      process.stdout.write(`${lead}  ${truncate(result.content, 400)}${RESET}\n`);
+      if (events) {
+        events.onToolEnd(call.id, name, result.content, !!result.rejected);
+      } else {
+        const lead = result.content.startsWith("error:") || result.rejected ? RED : DIM;
+        process.stdout.write(`${lead}  ${truncate(result.content, 400)}${RESET}\n`);
+      }
 
       if (throwAfter) {
         // Stub-fill any remaining tool_calls before propagating, otherwise
@@ -217,9 +300,12 @@ export async function runAgent(opts: RunOptions): Promise<void> {
     // whether to grant another budget or stop here.
     if (autoContinues < maxAutoContinue) {
       autoContinues++;
-      process.stdout.write(
-        `${DIM}── auto-continue ${autoContinues}/${maxAutoContinue} (${MAX_TOOL_DEPTH * autoContinues} tool calls so far; granting another ${MAX_TOOL_DEPTH})${RESET}\n`,
-      );
+      const text = `── auto-continue ${autoContinues}/${maxAutoContinue} (${MAX_TOOL_DEPTH * autoContinues} tool calls so far; granting another ${MAX_TOOL_DEPTH})`;
+      if (events) {
+        events.onNotice(text);
+      } else {
+        process.stdout.write(`${DIM}${text}${RESET}\n`);
+      }
       continue budgetLoop;
     }
     break budgetLoop;
@@ -227,11 +313,15 @@ export async function runAgent(opts: RunOptions): Promise<void> {
 
   // Either auto-continue was off or its budget is exhausted.
   const totalCalls = MAX_TOOL_DEPTH * (autoContinues + 1);
-  process.stdout.write(
+  const stopText =
     autoContinues > 0
-      ? `${DIM}(stopping after ${autoContinues} auto-continue(s) at ${totalCalls} total tool calls. Send 'continue' to give the agent another budget.)${RESET}\n`
-      : `${DIM}(reached MAX_TOOL_DEPTH=${MAX_TOOL_DEPTH}; stopping. Send 'continue' to grant another budget, or set DSC_AUTO_CONTINUE=N / run /auto-continue N to do this automatically.)${RESET}\n`,
-  );
+      ? `(stopping after ${autoContinues} auto-continue(s) at ${totalCalls} total tool calls. Send 'continue' to give the agent another budget.)`
+      : `(reached MAX_TOOL_DEPTH=${MAX_TOOL_DEPTH}; stopping. Send 'continue' to grant another budget, or set DSC_AUTO_CONTINUE=N / run /auto-continue N to do this automatically.)`;
+  if (events) {
+    events.onNotice(stopText);
+  } else {
+    process.stdout.write(`${DIM}${stopText}${RESET}\n`);
+  }
   onTurn?.();
 }
 
