@@ -7,6 +7,7 @@ import { ApprovalDialog } from "./ApprovalDialog.js";
 import { StatusBar } from "./StatusBar.js";
 import { PromptInput } from "./PromptInput.js";
 import { AgentTaskList } from "./AgentTaskList.js";
+import { QueuedPrompts } from "./QueuedPrompts.js";
 import { useStore } from "./useStore.js";
 
 interface AppProps {
@@ -26,6 +27,7 @@ export function App({ onSubmit, onAbort, history }: AppProps) {
       <TaskLine />
       <ApprovalDialog />
       <KeyHandlers onAbort={onAbort} />
+      <QueuedPrompts />
       <PromptInput onSubmit={onSubmit} history={history} />
       <StatusBar />
     </Box>

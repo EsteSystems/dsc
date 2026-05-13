@@ -59,6 +59,10 @@ export interface StoreState {
   contextTokens: number;
   toolCalls: number;
   sessionSeconds: number;
+  /** Pending prompts the user typed while a turn was running. Mirrored from
+   *  tui.tsx's local promptQueue so the QueuedPrompts component can render
+   *  them without holding its own state. queueDepth derives from this. */
+  queue: string[];
   queueDepth: number;
   busy: boolean;
 }
@@ -83,6 +87,7 @@ let state: StoreState = {
   contextTokens: 0,
   toolCalls: 0,
   sessionSeconds: 0,
+  queue: [],
   queueDepth: 0,
   busy: false,
 };

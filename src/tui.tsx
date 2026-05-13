@@ -39,7 +39,64 @@ import { openEditor } from "./editor.js";
 const AUTO_COMPACT_AT_TOKENS = Number(process.env.DSC_AUTO_COMPACT ?? "0") || 0;
 const AUTO_COMPACT_KEEP = Number(process.env.DSC_AUTO_COMPACT_KEEP ?? "4") || 4;
 
+interface CliParse {
+  prompt?: string;
+  help?: boolean;
+  version?: boolean;
+  yolo?: boolean;
+  noResume?: boolean;
+}
+
+// Minimal arg parsing for the TUI entry. Mirrors the subset of flags the
+// REPL accepts that meaningfully affect a one-shot turn. Anything fancier
+// (e.g. --model, --resume <id>) still has to go through --repl for now.
+function parseArgs(argv: string[]): CliParse {
+  const out: CliParse = {};
+  const positional: string[] = [];
+  for (let i = 0; i < argv.length; i++) {
+    const a = argv[i];
+    if (a === "--version" || a === "-v") out.version = true;
+    else if (a === "--help" || a === "-h") out.help = true;
+    else if (a === "--yolo" || a === "-y") out.yolo = true;
+    else if (a === "--no-resume") out.noResume = true;
+    else if (a.startsWith("-")) {
+      // Unknown flags fall through silently — bin routes --repl-only flags
+      // (--model, --resume <id>) to index.ts instead.
+    } else positional.push(a);
+  }
+  if (positional.length) out.prompt = positional.join(" ");
+  return out;
+}
+
 async function main() {
+  const cli = parseArgs(process.argv.slice(2));
+
+  if (cli.version) {
+    process.stdout.write(formatVersionInfo() + "\n");
+    process.exit(0);
+  }
+  if (cli.help) {
+    process.stdout.write(
+      [
+        "dsc — CLI coding agent for DeepSeek (TUI)",
+        "",
+        "Usage:",
+        "  dsc                       Start the TUI",
+        "  dsc \"your prompt here\"    One-shot: run and exit",
+        "  dsc --repl                Use the readline REPL instead",
+        "",
+        "Flags handled here:",
+        "  -y, --yolo                Skip approval prompts",
+        "      --no-resume           Don't auto-resume the latest session",
+        "  -v, --version             Print version and exit",
+        "  -h, --help                Show this help",
+        "",
+        "All other flags (--model, --resume <id>) go through --repl.",
+      ].join("\n") + "\n",
+    );
+    process.exit(0);
+  }
+
   if (!hasApiKey()) {
     process.stderr.write(
       `No DeepSeek API key found.\n` +
@@ -52,12 +109,14 @@ async function main() {
   const cwd = process.cwd();
   await history.migrateLegacyIfPresent(cwd, DEFAULT_MODEL);
 
-  // Auto-resume most recent for cwd; otherwise fresh.
+  // Auto-resume most recent for cwd unless --no-resume; otherwise fresh.
   let session = history.newSession(cwd, DEFAULT_MODEL);
-  const target = await history.mostRecentForCwd(cwd);
-  if (target) {
-    const loaded = await history.loadSession(target.id);
-    if (loaded) session = loaded;
+  if (!cli.noResume) {
+    const target = await history.mostRecentForCwd(cwd);
+    if (target) {
+      const loaded = await history.loadSession(target.id);
+      if (loaded) session = loaded;
+    }
   }
 
   // Reassigned by /clear and /resume — keep `let` so handlers can swap them
@@ -69,7 +128,7 @@ async function main() {
 
   const toolCtx: ToolContext = {
     cwd,
-    yolo: false,
+    yolo: !!cli.yolo,
     filesTouched: stats.files_touched,
     sessionId: session.id,
   };
@@ -112,6 +171,7 @@ async function main() {
       cacheHitTokens: stats.cache_hit_tokens,
       cacheMissTokens: stats.cache_miss_tokens,
       toolCalls: stats.tool_calls_total,
+      queue: promptQueue.slice(),
       queueDepth: promptQueue.length,
       compacted: !!session.compaction,
       cost: computeCostUsd(stats, model),
@@ -120,6 +180,7 @@ async function main() {
 
   setState({
     model,
+    yolo: toolCtx.yolo,
     assistantLabel: session.assistantLabel ?? "assistant:",
     language: session.language,
     autoContinue: initialAutoContinue,
@@ -716,6 +777,41 @@ async function main() {
       pendingAbort.abort();
     }
   };
+
+  if (cli.prompt) {
+    // One-shot: run the agent against the prompt with stdout-mode output
+    // (no events, no ink) and exit. Session state still loads + persists so
+    // subsequent interactive runs see the new turn.
+    clearInterval(timerId);
+    messages.push({ role: "user", content: cli.prompt });
+    pendingAbort = new AbortController();
+    try {
+      await runAgent({
+        model,
+        stats,
+        toolCtx,
+        messages,
+        signal: pendingAbort.signal,
+        onTurn: () => void persist(),
+        showReasoning: getState().reasoning,
+        getSummary: () => session.compaction?.summary,
+        assistantLabel: session.assistantLabel,
+        maxAutoContinue: getState().autoContinue,
+        language: session.language,
+        // No events: agent writes its assistant header, content, tool
+        // arrows, and notices directly to stdout — same as REPL one-shot.
+      });
+    } catch (e) {
+      if ((e as Error).name !== "AbortError" && !pendingAbort?.signal.aborted) {
+        process.stderr.write(
+          `\n${(e as Error).message ?? "error"}\n`,
+        );
+      }
+    }
+    await persist();
+    process.stdout.write(`\n${formatCost(stats, model)}\n`);
+    process.exit(0);
+  }
 
   mountApp();
 }

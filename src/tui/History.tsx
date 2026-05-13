@@ -73,9 +73,18 @@ export function MessageRow({ message: m, streaming = false }: MessageRowProps) {
         {m.role}
       </Text>
       {m.reasoning ? (
-        <Text dimColor italic>
-          {m.reasoning}
-        </Text>
+        // Render reasoning as its own labeled block: a dim "thinking"
+        // header with the body indented two columns and styled italic
+        // dim. Sits between the assistant label and the answer so the
+        // user can skim past it once they trust the model on a task.
+        <Box flexDirection="column" marginBottom={1}>
+          <Text dimColor>thinking</Text>
+          <Box marginLeft={2}>
+            <Text dimColor italic>
+              {m.reasoning}
+            </Text>
+          </Box>
+        </Box>
       ) : null}
       {renderRich ? (
         <Markdown source={m.content} />
