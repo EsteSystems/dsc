@@ -7,9 +7,12 @@
 
 A CLI coding agent for [DeepSeek](https://api-docs.deepseek.com/).
 Streams responses, calls tools (`bash`, `read_file`, `write_file`, `edit_file`,
-`grep`, `glob`, `web_fetch`, `web_search`), keeps per-cwd sessions, and runs
-in your terminal as a plain readline REPL — output stays selectable / pasteable
-and approvals happen inline.
+`grep`, `glob`, `web_fetch`, `web_search`, `task_*`), keeps per-cwd sessions,
+and runs as a [ink](https://github.com/vadimdemedes/ink)-based TUI by default
+— prompt + status bar pinned at the bottom, finalized turns kept in normal
+scrollback so they stay selectable and copy/paste-able. A readline REPL is
+still available via `--repl` for scripted one-shots or terminals that don't
+like ink.
 
 ## Install
 
@@ -31,11 +34,11 @@ Verify: `node --version` should print `v22.x.x` or higher.
 
 ### Step 2 — install dsc
 
-Three options. Once the package is published to npm, **(A)** is what you want.
-Today, use **(B)** for a frozen tarball or **(C)** if you'll be hacking on the
-source.
+Three options. **(A)** is the standard install once the package is on npm.
+Use **(B)** for a frozen tarball you can ship offline, or **(C)** if you'll
+be hacking on the source.
 
-**(A) From npm** *(after publish)*:
+**(A) From npm**:
 
 ```sh
 npm install -g @este.systems/dsc
@@ -198,15 +201,48 @@ setx DEEPSEEK_API_KEY "sk-..."                          # cmd.exe (persisted)
 ## Quick start
 
 ```sh
-dsc                                  # interactive REPL
-dsc "summarize src/api.ts"           # one-shot
+dsc                                  # interactive TUI
+dsc "summarize src/api.ts"           # one-shot (runs and exits)
 dsc --yolo "rename Foo to Bar"       # skip approval prompts
-dsc -m deepseek-v4-flash             # pick a model
 dsc --no-resume                      # fresh session, ignore prior history
-dsc --resume <id>                    # resume a specific session id
+dsc --repl                           # readline REPL instead of TUI
+dsc --repl -m deepseek-v4-flash      # REPL-only: pick a model
+dsc --repl --resume <id>             # REPL-only: resume a specific session
 ```
 
-## REPL commands
+## TUI layout
+
+```
+  ── scrollback (selectable, copy/pasteable) ──
+  user                       ← prior turns rendered into <Static>
+  assistant                  ← so they live in normal terminal scrollback
+  ← tool: ok                 ← tool results
+  ...
+  ── dynamic frame (pinned to bottom) ──
+  assistant                  ← currently-streaming message (rebuilds on
+  …                            every chunk; rich markdown on finalize)
+  ○ task one                 ← agent task list, hidden when empty / all done
+  ◐ task two
+  ● task three
+  → bash(npm test)           ← running tool indicator
+  queued (2):                ← prompts you typed while busy
+  → run the tests again
+  → and commit
+  > _                        ← your prompt input
+   deepseek-v4-pro · $0.012  ▲1.4K (h:1.1K m:300) ▼820  ctx:9.2K   0:34
+   ↑ status bar (model · cost · in/out tokens · cache hit/miss · ctx · timer)
+```
+
+The streaming current-turn renders plain text so re-renders stay cheap;
+once the turn finishes it moves into `<Static>` and gets the full
+markdown / table / code-block rendering. Approvals appear as their own
+modal-style yellow-bordered box; the prompt is greyed out underneath
+until you answer.
+
+## Slash commands
+
+Available in both the TUI and the `--repl` REPL. Type `/` and TAB cycles
+through completions.
 
 | Command | What it does |
 |---|---|
@@ -215,19 +251,28 @@ dsc --resume <id>                    # resume a specific session id
 | `/model [name]` | Show or switch model. Available: `deepseek-v4-pro`, `deepseek-v4-flash`. |
 | `/yolo` | Toggle approval mode (write/edit/bash/web_fetch). |
 | `/reasoning [on\|off]` | Show/hide `reasoning_content` from thinking models. Default on. |
+| `/lang [name\|off]` | Force the model to reply exclusively in a named language. |
+| `/auto-continue [N\|off]` | When the agent hits the per-turn tool-call cap, auto-grant up to N extra 24-call budgets. |
 | `/list` | List sessions in the current cwd. The active session is marked with `*`. |
-| `/resume <#\|id\|last>` | Resume a session by index (from `/list`), id, or `last`. |
-| `/audit` | Print the path of the JSONL audit log. |
+| `/resume <#\|id\|name\|last>` | Resume a session by index (from `/list`), id, name, or `last`. |
+| `/save <name>` | Name the current session. Show up in `/list` by name. |
+| `/rename <text>` | Override the "assistant:" label for the current session. |
+| `/queue [clear]` | List or clear the type-ahead queue. |
+| `/audit [path\|show N]` | Print the audit log path, or show the last N entries. |
 | `/transcript` | Print the full conversation, including any messages compaction archived. |
 | `/compact [N]` | Summarize older turns into a synthetic block (kept in the system prompt) and move them to the archive. Keeps the last `N` user turns verbatim (default 4). Cumulative across re-runs. |
 | `/edit [text]` | Open `$VISUAL`/`$EDITOR`/`vi` on a tmp file; the saved content runs as the next prompt. |
+| `/version` | Print version (dsc, Node, platform/arch). |
+| `/help` | Show the in-app help. |
 | `/exit` | Quit. |
 
 ### Multi-line input
 
 End a line with a single `\` to continue on the next line (bash-style).
-`\\` is treated as a literal trailing backslash. For longer or paste-heavy
-drafts, use `/edit`.
+`\\` is treated as a literal trailing backslash. The TUI renders the
+accumulated buffer above the active prompt dim with a `… ` marker so
+you can see what's queued. ESC cancels the buffer. For longer or
+paste-heavy drafts, use `/edit`.
 
 ```
 > please write a function\
@@ -237,9 +282,18 @@ drafts, use `/edit`.
 
 ### Hotkeys
 
-`Ctrl+C` aborts the current turn (first press), exits if pressed again
-within 1 second. `Ctrl+D` exits cleanly. Up / down arrows recall past
-prompts (persisted across sessions).
+| Key | Where | What |
+|---|---|---|
+| `Up` / `Down` | Prompt | Recall past prompts (persisted across sessions and across TUI ↔ REPL). |
+| `Tab` | Prompt | Complete a partial `/slash` command. |
+| `Ctrl+A` / `Ctrl+E` | Prompt | Cursor to start / end of line. |
+| `Ctrl+U` / `Ctrl+K` | Prompt | Delete to start / end of line. |
+| `Ctrl+W` | Prompt | Delete the word before the cursor. |
+| `ESC` | Turn busy | Abort the in-flight turn. |
+| `ESC` | Approval | Reject the pending tool call (same as `n`). |
+| `ESC` | Multiline | Clear the accumulated backslash-continuation buffer. |
+| `Ctrl+C` | Turn busy | Abort the in-flight turn. |
+| `Ctrl+C` / `Ctrl+D` | Idle | Exit cleanly. |
 
 ### Session scoping (per-directory)
 
@@ -274,12 +328,18 @@ the archived messages from `/transcript`.
 | `grep(pattern, path?, glob?, case_insensitive?)` | none | ripgrep when available, `grep -rn` fallback. |
 | `glob(pattern, path?)` | none | Node 22+ `fs.glob`, capped at 500. |
 | `web_search(query, count?, freshness?)` | none | Pluggable backends (Brave / Tavily / DuckDuckGo). |
+| `task_create(subject, activeForm?)` | none | Adds a pending task to the user-visible task list. |
+| `task_update(id, status?, subject?, activeForm?)` | none | Moves a task between pending / in_progress / completed. |
+| `task_list()` | none | Returns the current task list with statuses. |
 | `write_file(path, content)` | yes (unless `--yolo`) | Side-by-side diff in the prompt. |
 | `edit_file(path, old_string, new_string, replace_all?)` | yes | Exact substring replace; old_string must be unique unless `replace_all=true`. |
-| `bash(command, description?, timeout_ms?)` | yes | `/bin/sh -c`, output capped at 16 KB. |
+| `bash(command, description?, timeout_ms?)` | yes | `/bin/sh` on Linux/macOS, `cmd.exe` on Windows. Output capped at 16 KB. |
 | `web_fetch(url)` | yes | HTML stripped to text, capped at 50 KB. |
 
-Read-only tools never prompt. The rest do unless `--yolo` is on.
+Read-only tools never prompt. The rest do unless `--yolo` is on. The
+`task_*` tools mutate an in-memory list that the TUI renders above the
+prompt; the model is encouraged (via the system prompt) to reach for
+them on non-trivial multi-step asks so the user sees real-time progress.
 
 ## Sessions and history
 
@@ -462,21 +522,41 @@ Source layout:
 
 ```
 src/
-  index.ts          # REPL, slash commands, signal handling
-  agent.ts          # tool-call loop, status formatting, repair logic
+  tui.tsx           # TUI entry: arg parsing, session + agent wiring, slash dispatcher
+  index.ts          # readline REPL entry (--repl)
+  agent.ts          # tool-call loop, AgentEvents emitter, repair logic
   api.ts            # DeepSeek client, retry/abort, prompt cache rates
-  tools.ts          # tool schemas + executors (read/write/edit/bash/grep/glob/web_*)
-  approval.ts       # confirmWrite/Edit/Bash/Fetch
+  tools.ts          # tool schemas + executors (read/write/edit/bash/grep/glob/web_*/task_*)
+  approval.ts       # confirmWrite/Edit/Bash/Fetch — pluggable asker
   audit.ts          # JSONL audit logger
   search.ts         # Brave / Tavily / DDG dispatch
   compact.ts        # /compact summarization routine
   history.ts        # session save/load/list/migrate-legacy
-  repl_history.ts   # ~/.local/state/dsc/history reader/writer
-  markdown.ts       # streaming markdown→ANSI renderer (incl. tables, HR, LaTeX→Unicode)
-  ui.ts             # Spinner with stall detection; one-line StatusBar
+  repl_history.ts   # ~/.local/state/dsc/history reader/writer (shared)
+  markdown.ts       # REPL streaming markdown→ANSI renderer
+  ui.ts             # REPL: Spinner with stall detection; DECSTBM StatusBar
   prompt.ts         # SYSTEM_PROMPT + buildSystemPrompt
+  editor.ts         # $EDITOR launcher (shared by /edit in both front-ends)
+  slash.ts          # SLASH_COMMANDS list + TAB-completion helper (shared)
+  store.ts          # TUI pub/sub state container (history, agentTasks, queue, etc.)
+  tui/
+    App.tsx              # root layout
+    History.tsx          # <Static> for finalized turns
+    CurrentTurn.tsx      # in-progress streaming message
+    Markdown.tsx         # markdown → ink Text-tree (incl. tables)
+    AgentTaskList.tsx    # bullets above the prompt
+    QueuedPrompts.tsx    # dim list of pending submissions
+    TaskLine.tsx         # "→ tool(...)" indicator while a tool runs
+    StatusBar.tsx        # full-width inverse-video status line
+    PromptInput.tsx      # backslash-continuation buffer + prompt char
+    Input.tsx            # custom controlled input (cursor, history, TAB)
+    ApprovalDialog.tsx   # yellow-bordered modal for tool approvals
+    useStore.ts          # selector + equality hook over store.ts
 ```
 
-The `ink-port` branch is a parked experiment — a React-based ink TUI
-shell. `main` deliberately stays a plain REPL so output remains
-selectable.
+The agent loop in `agent.ts` is shared between front-ends. When called
+with an `events` callback set it emits structured events (assistant
+start/content/reasoning/final, tool start/end, notice) that the TUI
+pipes into the store; when called without `events` it writes the same
+information directly to stdout — that's what the REPL and the TUI
+one-shot mode use.
