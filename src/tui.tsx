@@ -248,20 +248,43 @@ async function main() {
     },
     onAssistantFinal: (turnId, msg) => {
       // Move from `current` into the static history (so it's selectable).
-      // Drop assistant turns that produced neither content nor reasoning
-      // (tool-only turns) — the tool messages themselves will appear.
-      const has = (msg.content && msg.content.length) || (msg.reasoning && msg.reasoning.length);
+      // Only skip when the turn was purely a tool dispatch (content empty,
+      // reasoning empty, and tool_calls present) — those produce visible
+      // tool messages of their own, so an "(no content)" placeholder would
+      // be noise. A truly empty turn (no content, no reasoning, no tool
+      // calls) still gets a marker so the user knows the agent stopped
+      // rather than wondering whether something silently broke.
+      const hasText =
+        (msg.content && msg.content.length) ||
+        (msg.reasoning && msg.reasoning.length);
+      const isToolOnly = !hasText && msg.tool_calls && msg.tool_calls.length;
       setState((s) => {
         const next: Partial<typeof s> = { current: null };
-        if (has) {
-          const final: UIMessage = {
-            id: turnId,
-            role: "assistant",
-            content: msg.content,
-            reasoning: msg.reasoning,
-            tool_calls: msg.tool_calls,
-          };
-          next.history = [...s.history, final];
+        if (isToolOnly) {
+          // pure tool dispatch — tool messages will appear separately
+        } else if (hasText) {
+          next.history = [
+            ...s.history,
+            {
+              id: turnId,
+              role: "assistant",
+              content: msg.content,
+              reasoning: msg.reasoning,
+              tool_calls: msg.tool_calls,
+            },
+          ];
+        } else {
+          // Genuinely empty turn — show a marker rather than appearing to
+          // hang. Most often hit when an upstream filter or network drop
+          // cuts the stream before any tokens arrive.
+          next.history = [
+            ...s.history,
+            {
+              id: turnId,
+              role: "system",
+              content: "(model returned no content)",
+            },
+          ];
         }
         return next;
       });

@@ -494,11 +494,24 @@ async function runBash(
     // `shell: true` makes Node pick the platform's default: /bin/sh -c on
     // POSIX, cmd.exe /d /s /c on Windows. Lets the same `bash` tool work
     // across Linux/macOS/Windows without us shelling out to a hardcoded path.
-    const child = spawn(command, [], { cwd: ctx.cwd, shell: true });
+    //
+    // stdio = ["ignore", "pipe", "pipe"]: don't open a stdin pipe. On
+    // Windows in particular, cmd.exe / powershell spawn grandchildren that
+    // inherit stdio handles — keeping stdin open lets those grandchildren
+    // claim it and prevent `close` from ever firing, even after the
+    // immediate child has exited. windowsHide skips the flashed console.
+    const child = spawn(command, [], {
+      cwd: ctx.cwd,
+      shell: true,
+      stdio: ["ignore", "pipe", "pipe"],
+      windowsHide: true,
+    });
     let stdout = "";
     let stderr = "";
     let timedOut = false;
     let interrupted = false;
+    let settled = false;
+
     const timer = setTimeout(() => {
       timedOut = true;
       child.kill("SIGKILL");
@@ -513,11 +526,16 @@ async function runBash(
     }
     child.stdout.on("data", (d) => (stdout += d.toString()));
     child.stderr.on("data", (d) => (stderr += d.toString()));
-    child.on("close", (code) => {
+
+    const settle = (code: number | null) => {
+      if (settled) return;
+      settled = true;
       clearTimeout(timer);
+      clearTimeout(graceTimer);
       signal?.removeEventListener("abort", onAbort);
       const MAX = 16_000;
-      const trim = (s: string) => (s.length > MAX ? s.slice(0, MAX) + `\n…(truncated, ${s.length - MAX} more chars)` : s);
+      const trim = (s: string) =>
+        s.length > MAX ? s.slice(0, MAX) + `\n…(truncated, ${s.length - MAX} more chars)` : s;
       const parts: string[] = [];
       const exitDesc = interrupted
         ? "killed (interrupted)"
@@ -537,9 +555,34 @@ async function runBash(
           stderr_bytes: stderr.length,
         },
       });
+    };
+
+    // On `exit` the process has finished; on `close` its stdio is also
+    // fully drained. Grandchildren that inherit stdio (the Windows hang)
+    // can keep `close` from firing even after exit. So: prefer `close`
+    // when it arrives quickly, otherwise force-settle 500ms after exit
+    // with whatever output we already have.
+    let graceTimer: NodeJS.Timeout = setTimeout(() => {}, 0);
+    clearTimeout(graceTimer);
+    child.on("exit", (code) => {
+      graceTimer = setTimeout(() => {
+        // Detach our listeners on the stdio streams so leftover data from
+        // grandchildren doesn't keep this process tree alive.
+        try {
+          child.stdout?.destroy();
+        } catch {}
+        try {
+          child.stderr?.destroy();
+        } catch {}
+        settle(code);
+      }, 500);
     });
+    child.on("close", (code) => settle(code));
     child.on("error", (e) => {
+      if (settled) return;
+      settled = true;
       clearTimeout(timer);
+      clearTimeout(graceTimer);
       signal?.removeEventListener("abort", onAbort);
       resolve({ content: `error: ${e.message}`, audit: { command, error: "spawn_failed" } });
     });
