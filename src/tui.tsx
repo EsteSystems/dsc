@@ -267,7 +267,7 @@ async function main() {
       });
     },
     onToolStart: (_callId, name, args) => {
-      setState({ task: `${name}(${truncate(args, 80)})` });
+      setState({ task: formatTaskLabel(name, args) });
     },
     onToolEnd: (callId, name, content, rejected) => {
       setState((s) => ({
@@ -405,6 +405,10 @@ async function main() {
       0,
     );
     if (auto) info(`── auto-compact (ctx > ${AUTO_COMPACT_AT_TOKENS} tokens)`);
+    // Flip busy so the StatusBar shows the spinner — compaction is a
+    // single-shot API call that can take 5–15s on long sessions and was
+    // silent before this.
+    setState({ busy: true, task: "compacting" });
     try {
       const result = await compactSession(session, keep, model);
       if (!result) {
@@ -440,6 +444,8 @@ async function main() {
           ? `error: compaction failed: ${e.message}`
           : `error: compaction failed: ${(e as Error).message}`,
       );
+    } finally {
+      setState({ busy: false, task: null });
     }
   };
 
@@ -818,6 +824,53 @@ async function main() {
 
 function truncate(s: string, n: number): string {
   return s.length <= n ? s : s.slice(0, n) + "…";
+}
+
+// Render the "what tool is running" label shown in the status bar (right
+// side) and TaskLine. Without this, we'd dump the raw JSON arguments
+// inline — `bash({"command":"npm test","description":"running tests"})` —
+// which reads like the command leaked into the bar. Per-tool extraction
+// picks the one field a user actually cares about.
+function formatTaskLabel(name: string, argsJson: string): string {
+  let primary: string | undefined;
+  try {
+    const a = JSON.parse(argsJson) as Record<string, unknown>;
+    const pick = (k: string) =>
+      typeof a[k] === "string" ? (a[k] as string) : undefined;
+    switch (name) {
+      case "bash":
+        primary = pick("command");
+        break;
+      case "read_file":
+      case "write_file":
+      case "edit_file":
+        primary = pick("path");
+        break;
+      case "grep":
+      case "glob":
+        primary = pick("pattern");
+        break;
+      case "web_fetch":
+        primary = pick("url");
+        break;
+      case "web_search":
+        primary = pick("query");
+        break;
+      case "task_create":
+        primary = pick("subject");
+        break;
+      case "task_update": {
+        const id = pick("id") ?? String(a.id ?? "");
+        const status = pick("status");
+        primary = status ? `${id} → ${status}` : id;
+        break;
+      }
+    }
+  } catch {
+    // Falls through to the bare tool name if the args weren't JSON.
+  }
+  if (!primary) return name;
+  return `${name}: ${truncate(primary, 60)}`;
 }
 
 function formatRelative(ts: number): string {

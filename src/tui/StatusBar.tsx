@@ -1,6 +1,21 @@
-import React from "react";
+import React, { useEffect, useState } from "react";
 import { Box, Text, useStdout } from "ink";
 import { useStore } from "./useStore.js";
+
+// Braille-block spinner — same shape Ora/cli-spinners use. Each entry is a
+// single column wide so it doesn't shift the status-bar layout per tick.
+const SPINNER_FRAMES = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
+const SPINNER_INTERVAL_MS = 80;
+
+function useSpinnerFrame(active: boolean): string | null {
+  const [frame, setFrame] = useState(0);
+  useEffect(() => {
+    if (!active) return;
+    const id = setInterval(() => setFrame((f) => (f + 1) % SPINNER_FRAMES.length), SPINNER_INTERVAL_MS);
+    return () => clearInterval(id);
+  }, [active]);
+  return active ? SPINNER_FRAMES[frame] : null;
+}
 
 function formatCount(n: number): string {
   if (n >= 1_000_000) return (n / 1_000_000).toFixed(1) + "M";
@@ -20,6 +35,7 @@ export function StatusBar() {
   const s = useStore((x) => x);
   const { stdout } = useStdout();
   const width = stdout?.columns ?? 80;
+  const spinner = useSpinnerFrame(s.busy);
 
   const flags =
     (s.yolo ? " yolo" : "") +
@@ -34,11 +50,15 @@ export function StatusBar() {
     `▲${formatCount(s.inTokens)}${cache} ▼${formatCount(s.outTokens)}  ` +
     `ctx:${formatCount(s.contextTokens)}` +
     (s.queueDepth > 0 ? `  queued:${s.queueDepth}` : "");
-  const right = s.busy
+  const rightBody = s.busy
     ? s.task
-      ? `${s.task}`
+      ? s.task
       : "thinking"
     : formatDuration(s.sessionSeconds);
+  // Spinner sits just before the right-side text when busy, taking one
+  // column. Padding math uses the visible length so the bar stays width-
+  // exact regardless of which spinner frame is current.
+  const right = spinner ? `${spinner} ${rightBody}` : rightBody;
 
   // Pad left + right to fill terminal width so the reverse-video block
   // spans edge-to-edge without wrapping. The rendered line is framed by a
