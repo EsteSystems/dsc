@@ -32,6 +32,7 @@ import * as approval from "./approval.js";
 import * as audit from "./audit.js";
 import * as replHistory from "./repl_history.js";
 import { promises as fsp } from "node:fs";
+import * as path from "node:path";
 import { compactSession } from "./compact.js";
 import { formatVersionInfo } from "./version.js";
 import { openEditor } from "./editor.js";
@@ -506,6 +507,8 @@ async function main() {
             "/transcript             dump full message log",
             "/audit [path|show N]    audit log info",
             "/queue [clear]          list or clear queued prompts",
+            "/export [path]          write current session JSON for transfer",
+            "/import <path>          load session JSON; rebinds cwd here (--keep-cwd to skip)",
             "/exit                   exit",
           ].join("\n"),
         );
@@ -757,6 +760,69 @@ async function main() {
         const keepRaw = arg ? parseInt(arg, 10) : NaN;
         const keep = Number.isFinite(keepRaw) ? Math.max(0, keepRaw) : 4;
         await runCompaction(keep, false);
+        return true;
+      }
+      case "export": {
+        // `/export [path]` — writes the current session JSON. Relative
+        // paths resolve against the launch cwd, not against the session's
+        // recorded cwd, so it lands where the user actually is. Default
+        // target is the cwd, named after /save'd name (or id) and date.
+        const dest = arg.trim() || ".";
+        const absDest = path.isAbsolute(dest) ? dest : path.resolve(cwd, dest);
+        try {
+          await persist(); // flush any pending writes before export
+          const written = await history.exportSession(session.id, absDest);
+          info(`exported to ${written}`);
+        } catch (e) {
+          info(`error: export failed: ${(e as Error).message}`);
+        }
+        return true;
+      }
+      case "import": {
+        // `/import <path>` — reads a session JSON, rebinds its cwd to the
+        // current directory so auto-resume picks it up here, and loads it
+        // as the active session immediately. Keep the previous cwd with
+        // `--keep-cwd` (positional flag, kept simple).
+        const tokens = arg.trim().split(/\s+/).filter(Boolean);
+        const keepCwd = tokens.includes("--keep-cwd");
+        const file = tokens.find((t) => !t.startsWith("--"));
+        if (!file) {
+          info("error: usage: /import <path> [--keep-cwd]");
+          return true;
+        }
+        const absFile = path.isAbsolute(file) ? file : path.resolve(cwd, file);
+        try {
+          const loaded = await history.importSession(absFile, {
+            rebindCwd: keepCwd ? undefined : cwd,
+          });
+          session = loaded;
+          messages = session.messages;
+          stats = session.stats;
+          model = session.model;
+          toolCtx.filesTouched = stats.files_touched;
+          toolCtx.sessionId = session.id;
+          // Refill the visible history so the user sees the imported
+          // conversation right away (same logic the /resume path uses).
+          const restored: UIMessage[] = [];
+          for (const m of messages) {
+            if (m.role === "system") continue;
+            restored.push({
+              id: `r-${restored.length}`,
+              role: m.role as UIMessage["role"],
+              content: typeof m.content === "string" ? m.content : "",
+              tool_call_id: m.tool_call_id,
+            });
+          }
+          setState({ history: restored, current: null, model });
+          syncStatus();
+          const userTurns = messages.filter((m) => m.role === "user").length;
+          const cwdNote = keepCwd ? "" : " (cwd rebound to here)";
+          info(
+            `imported ${session.id} (${userTurns} turns, model ${model})${cwdNote}`,
+          );
+        } catch (e) {
+          info(`error: import failed: ${(e as Error).message}`);
+        }
         return true;
       }
       case "edit": {

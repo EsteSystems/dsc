@@ -246,6 +246,125 @@ export async function deleteSession(id: string): Promise<void> {
   }
 }
 
+/**
+ * Write a session out to `outPath` for transport to another machine.
+ *
+ * `outPath` resolution:
+ *   - if it ends in `/` or is an existing directory → drops a default-named
+ *     `<name|id-prefix>-<YYYY-MM-DD>.json` inside it
+ *   - otherwise treated as the target filename
+ *
+ * Returns the actual path written. Throws if the session can't be loaded.
+ */
+export async function exportSession(id: string, outPath: string): Promise<string> {
+  const session = await loadSession(id);
+  if (!session) throw new Error(`session not found: ${id}`);
+
+  let target = outPath;
+  let dirHint = false;
+  try {
+    const st = await fs.stat(outPath);
+    dirHint = st.isDirectory();
+  } catch {
+    // outPath doesn't exist yet — treat the trailing slash as a directory hint
+    if (outPath.endsWith("/") || outPath.endsWith(path.sep)) dirHint = true;
+  }
+  if (dirHint) {
+    const namePart = (session.name ?? session.id).replace(/[^a-zA-Z0-9_-]/g, "_");
+    const date = new Date().toISOString().slice(0, 10);
+    target = path.join(outPath, `${namePart}-${date}.json`);
+  }
+
+  // Re-serialize via the same v2 shape saveSession writes — that way the
+  // export round-trips through saveSession on the other end with no schema
+  // surprises. updated_at gets refreshed at the moment of export.
+  const data: SessionFileV2 = {
+    version: 2,
+    id: session.id,
+    cwd: session.cwd,
+    model: session.model,
+    created_at: session.created_at,
+    updated_at: Date.now(),
+    messages: session.messages,
+    stats: statsToPersisted(session.stats),
+    ...(session.compaction ? { compaction: session.compaction } : {}),
+    ...(session.archivedMessages?.length
+      ? { archivedMessages: session.archivedMessages }
+      : {}),
+    ...(session.name ? { name: session.name } : {}),
+    ...(session.assistantLabel ? { assistantLabel: session.assistantLabel } : {}),
+    ...(session.language ? { language: session.language } : {}),
+  };
+  await fs.mkdir(path.dirname(target), { recursive: true });
+  await fs.writeFile(target, JSON.stringify(data, null, 2), "utf8");
+  return target;
+}
+
+export interface ImportOptions {
+  /** Rewrite the session's cwd to this directory so auto-resume picks it
+   *  up from there. Defaults to keeping the original cwd. */
+  rebindCwd?: string;
+  /** Optional /save-style name to attach during import. */
+  name?: string;
+}
+
+/**
+ * Read a session from `inPath` and install it into the local sessions dir.
+ * Mints a fresh id if one collides with an existing session — the file on
+ * disk is whatever we save, never an overwrite of someone else's session.
+ *
+ * Returns the SessionState as it now lives locally.
+ */
+export async function importSession(
+  inPath: string,
+  opts: ImportOptions = {},
+): Promise<SessionState> {
+  let text: string;
+  try {
+    text = await fs.readFile(inPath, "utf8");
+  } catch (e) {
+    throw new Error(`cannot read ${inPath}: ${(e as Error).message}`);
+  }
+  // PowerShell-written files can carry a UTF-8 BOM; strip before parsing.
+  text = text.replace(/^﻿/, "");
+
+  let data: SessionFileV2;
+  try {
+    data = JSON.parse(text) as SessionFileV2;
+  } catch (e) {
+    throw new Error(`invalid JSON in ${inPath}: ${(e as Error).message}`);
+  }
+  if (!data || data.version !== 2 || !data.id || !Array.isArray(data.messages)) {
+    throw new Error(`${inPath} is not a dsc session file (need version 2 with id+messages)`);
+  }
+
+  // Collision-safe: if a session with this id already lives locally, mint
+  // a fresh one rather than overwrite. The original (remote) id is gone
+  // from the local copy after this — annoying for traceability but the
+  // safety win is worth more than the audit handle.
+  let id = data.id;
+  if (await loadSession(id)) {
+    id = newSessionId();
+  }
+
+  const model: Model = AVAILABLE_MODELS.includes(data.model) ? data.model : DEFAULT_MODEL;
+  const session: SessionState = {
+    id,
+    cwd: opts.rebindCwd ?? data.cwd,
+    model,
+    messages: data.messages,
+    stats: statsFromPersisted(data.stats),
+    created_at: data.created_at,
+    compaction: data.compaction,
+    archivedMessages: data.archivedMessages,
+    name: opts.name ?? data.name,
+    assistantLabel: data.assistantLabel,
+    language: data.language,
+  };
+  await saveSession(session);
+  return session;
+}
+
 // Migrate ./.dsc-history.json (v1) into the new sessions dir on startup.
 // Returns the new session id if a migration happened.
 export async function migrateLegacyIfPresent(cwd: string, model: Model): Promise<string | null> {
