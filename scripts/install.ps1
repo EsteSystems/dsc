@@ -38,9 +38,10 @@ $dsc = Get-Command dsc -ErrorAction SilentlyContinue
 if ($dsc) {
     Write-Host ""
     Write-Host "✓ dsc installed: $($dsc.Source)"
-    Write-Host "  set DEEPSEEK_API_KEY or create ~/.config/deepseek/deepseek.json, then run: dsc"
+    Write-Host "  next: run 'dsc' and use '/api-key sk-...' to save your DeepSeek key"
 } else {
     Write-Host ""
     Write-Host "✓ install completed but ``dsc`` is not on PATH."
-    Write-Host "  Check your npm global bin: npm config get prefix"
+    Write-Host "  bin lives at: $(npm config get prefix)"
+    Write-Host "  add that directory to PATH and reopen the terminal."
 }

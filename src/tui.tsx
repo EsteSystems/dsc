@@ -802,11 +802,20 @@ async function main() {
           const r = await runUpdate();
           if (!r.ok) {
             // npm prints reasonably descriptive errors itself; pass them
-            // through so EACCES / permission issues are obvious.
-            info(
-              `error: update failed\n${r.output.slice(-1500)}\n\n` +
-                `If this is a permission error, try: sudo npm install -g @este.systems/dsc@latest`,
-            );
+            // through. For the common EACCES case on Linux/macOS where
+            // npm's prefix points at /usr/local, suggest a user-owned
+            // prefix as the durable fix — sudo'ing the install once
+            // only postpones the same error next time.
+            const isPermError = /EACCES|EPERM|permission/.test(r.output);
+            const tail =
+              isPermError && process.platform !== "win32"
+                ? `\n\nThis looks like a permission error. The durable fix is to put npm's global dir under your home:` +
+                  `\n  npm config set prefix ~/.local` +
+                  `\n  export PATH=~/.local/bin:$PATH    # add to ~/.bashrc / ~/.zshrc` +
+                  `\n  /update                            # try again` +
+                  `\n\nQuick one-off:  sudo npm install -g @este.systems/dsc@latest`
+                : "";
+            info(`error: update failed\n${r.output.slice(-1500)}${tail}`);
             return true;
           }
           info(

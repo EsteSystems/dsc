@@ -7,6 +7,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+- README leads the install with a one-time `npm config set prefix ~/.local` + PATH export so `npm install -g` (and `/update`) work without `sudo` on Linux / macOS. Windows already uses a user-owned prefix and is unchanged.
+- `scripts/install.sh` detects a root-owned npm prefix and auto-configures `~/.local` when run as a non-root user. `--system` opts out (use the existing prefix, may need sudo); `--user` forces the switch.
+- `/update` on EACCES no longer just suggests `sudo`. It explains the durable fix (`npm config set prefix ~/.local` + PATH) and keeps the one-off `sudo` line as a fallback.
+
 ## [0.4.0] - 2026-05-17
 
 ### Added

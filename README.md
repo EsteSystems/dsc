@@ -40,9 +40,27 @@ be hacking on the source.
 
 **(A) From npm**:
 
+On most Linux / macOS installs, `npm`'s global directory is `/usr/local`,
+which is root-owned. Before installing any global npm tool — not just
+dsc — point npm at a user-owned directory so `npm install -g` (and dsc's
+`/update`) work without `sudo`:
+
+```sh
+# One-time setup. Skip if you've done this for another npm tool.
+npm config set prefix ~/.local
+
+# Add this to ~/.bashrc / ~/.zshrc and reopen the terminal:
+export PATH="$HOME/.local/bin:$PATH"
+```
+
+Then:
+
 ```sh
 npm install -g @este.systems/dsc
 ```
+
+**Windows** users already get a user-owned prefix by default (`%APPDATA%\npm`).
+Skip the `npm config set prefix` step and run the install directly.
 
 After install, run `dsc`. On a fresh machine the TUI greets you with a
 one-time welcome card and points you at `/api-key sk-...` for the
@@ -63,7 +81,8 @@ npm run package      # produces pkg/<name>-<version>.tgz
 then on **Linux / macOS**:
 
 ```sh
-scripts/install.sh
+scripts/install.sh                    # auto-configures user prefix if needed
+scripts/install.sh --system           # use existing prefix (may need sudo)
 ```
 
 or on **Windows PowerShell**:
@@ -72,8 +91,10 @@ or on **Windows PowerShell**:
 .\scripts\install.ps1
 ```
 
-Both wrappers just call `npm install -g pkg/*.tgz` after auto-finding the
-tarball.
+The Linux / macOS wrapper checks whether `npm config get prefix` points
+at a user-writable directory. If not — and you aren't root — it sets up
+`~/.local` and adds a PATH hint before installing. Pass `--system` to
+opt out.
 
 **(C) From source for development** *(live edits, no rebuild step)*:
 
