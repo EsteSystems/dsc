@@ -2,7 +2,13 @@ const DIM = "\x1b[2m";
 const YELLOW = "\x1b[33m";
 const RESET = "\x1b[0m";
 
-const SPINNER_FRAMES = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
+// Quadrant blocks (U+2596–U+259D). Picked over the classic braille set
+// because every mainstream dev mono font (IBM Plex, JetBrains, Cascadia,
+// Consolas, Noto Sans Mono) actually contains these glyphs in its cmap —
+// no font-linking fallback, so the spinner cell metrics match the rest of
+// the line. Braille (U+28xx) is absent from all of those, which forces
+// conhost to render the spinner in Segoe UI Symbol.
+const SPINNER_FRAMES = ["▖", "▘", "▝", "▗"];
 const STALL_THRESHOLD_MS = 10_000;
 
 export class Spinner {
