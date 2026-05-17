@@ -23,7 +23,13 @@ for (const f of readdirSync(pkgDir)) {
 }
 
 console.log(`▶ npm pack (prepack will rebuild dist/)`);
-const r = spawnSync(npm, ["pack", "--silent"], { stdio: "inherit", cwd: root });
+// shell: true on Windows: see scripts/build.mjs for the CVE-2024-27980
+// EINVAL-on-.cmd story. Same workaround applies.
+const r = spawnSync(npm, ["pack", "--silent"], {
+  stdio: "inherit",
+  cwd: root,
+  shell: process.platform === "win32",
+});
 if (r.status !== 0) process.exit(r.status ?? 1);
 
 // Discover the tarball — the filename depends on whether the package is
