@@ -34,10 +34,12 @@ import * as approval from "./approval.js";
 import * as audit from "./audit.js";
 import * as replHistory from "./repl_history.js";
 import { promises as fsp } from "node:fs";
+import { homedir } from "node:os";
 import * as path from "node:path";
 import { compactSession } from "./compact.js";
 import { formatVersionInfo } from "./version.js";
 import { openEditor } from "./editor.js";
+import { checkForUpdate, runUpdate } from "./update.js";
 
 const AUTO_COMPACT_AT_TOKENS = Number(process.env.DSC_AUTO_COMPACT ?? "0") || 0;
 const AUTO_COMPACT_KEEP = Number(process.env.DSC_AUTO_COMPACT_KEEP ?? "4") || 4;
@@ -509,6 +511,7 @@ async function main() {
             "/export [path]          write current session JSON for transfer",
             "/import <path>          load session JSON; rebinds cwd here (--keep-cwd to skip)",
             "/api-key [key]          show source / save api key to config file",
+            "/update                 check npm for a newer dsc and install it",
             "/exit                   exit",
           ].join("\n"),
         );
@@ -705,6 +708,38 @@ async function main() {
       case "version":
         info(formatVersionInfo());
         return true;
+      case "update": {
+        // Two-phase: check first so we don't run npm install when we're
+        // already current. Force-fetches the latest (ignores the 24h cache
+        // because the user explicitly asked) and reports either way.
+        info("checking npm for a newer version…");
+        try {
+          const check = await checkForUpdate({ force: true });
+          if (!check.newerAvailable) {
+            info(`up to date (${check.current})`);
+            return true;
+          }
+          info(
+            `installing ${check.latest} (currently ${check.current}) via npm…`,
+          );
+          const r = await runUpdate();
+          if (!r.ok) {
+            // npm prints reasonably descriptive errors itself; pass them
+            // through so EACCES / permission issues are obvious.
+            info(
+              `error: update failed\n${r.output.slice(-1500)}\n\n` +
+                `If this is a permission error, try: sudo npm install -g @este.systems/dsc@latest`,
+            );
+            return true;
+          }
+          info(
+            `installed ${check.latest}. Exit and re-run \`dsc\` to pick up the new version.`,
+          );
+        } catch (e) {
+          info(`error: update failed: ${(e as Error).message}`);
+        }
+        return true;
+      }
       case "api-key": {
         const text = arg.trim();
         if (!text) {
@@ -946,15 +981,69 @@ async function main() {
 
   mountApp();
 
-  // Surface the missing-key state once the UI is up so it lands in the
-  // pinned history instead of as stderr noise that scrolls past. Mentions
-  // both /api-key and the env-var alternative so power users aren't forced
-  // through the slash command.
-  if (startupKeyMissing) {
+  // One-time welcome panel. Stamped via a touch-file under XDG_STATE_HOME
+  // so we never nag the same user twice. New users get an orientation
+  // (key, /help, hotkeys); the more-targeted "no API key" reminder fires
+  // on every subsequent launch when no key is configured.
+  const stateDir = ((): string => {
+    const xdg = process.env.XDG_STATE_HOME;
+    const base = xdg && xdg.length ? xdg : path.join(homedir(), ".local", "state");
+    return path.join(base, "dsc");
+  })();
+  const welcomeStamp = path.join(stateDir, "welcomed");
+  let alreadyWelcomed = false;
+  try {
+    await fsp.access(welcomeStamp);
+    alreadyWelcomed = true;
+  } catch {
+    // first launch
+  }
+
+  if (!alreadyWelcomed) {
+    const lines: string[] = [
+      "Welcome to dsc — a CLI coding agent for DeepSeek.",
+      "",
+      "  /help            full command list (TAB completes any /command)",
+      "  Up / Down        recall past prompts",
+      "  ESC              abort a running turn",
+      "  Ctrl+D           exit",
+    ];
+    if (startupKeyMissing) {
+      lines.push(
+        "",
+        `To get started, save your API key:  /api-key sk-...`,
+        `  (or export DEEPSEEK_API_KEY in your shell)`,
+      );
+    }
+    info(lines.join("\n"));
+    try {
+      await fsp.mkdir(stateDir, { recursive: true });
+      await fsp.writeFile(welcomeStamp, new Date().toISOString(), "utf8");
+    } catch {
+      // best-effort; missing perms just means the welcome shows again
+    }
+  } else if (startupKeyMissing) {
+    // Targeted nudge for returning users who somehow lost their key.
     info(
       `No DeepSeek API key found. Run "/api-key <key>" to save one to ${configPath()}, or export DEEPSEEK_API_KEY in your shell.`,
     );
   }
+
+  // Fire-and-forget update probe. Uses the 24h cache by default so a
+  // chatty notice doesn't appear on every launch — only once per day,
+  // when the registry says we're behind. Failures are swallowed silently.
+  void (async () => {
+    try {
+      const check = await checkForUpdate();
+      if (check.newerAvailable) {
+        info(
+          `update available: ${check.latest} (you have ${check.current}). Run /update to install.`,
+        );
+      }
+    } catch {
+      // best-effort; offline launches shouldn't yell at the user
+    }
+  })();
 }
 
 function truncate(s: string, n: number): string {

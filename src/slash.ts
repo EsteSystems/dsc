@@ -23,6 +23,7 @@ export const SLASH_COMMANDS: ReadonlyArray<string> = [
   "resume",
   "save",
   "transcript",
+  "update",
   "version",
   "yolo",
 ];
