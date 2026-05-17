@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.4.1] - 2026-05-17
+
 ### Added
 - `/update` on EACCES (Linux / macOS) now offers to do the user-prefix setup itself. The yellow approval dialog asks first; on `y` it runs `mkdir -p ~/.local/{bin,lib}`, `npm config set prefix ~/.local`, and retries the install. If `~/.local/bin` isn't on PATH afterwards, a second dialog offers to append the export line to the detected shell rc (`~/.bashrc` / `~/.bash_profile` / `~/.zshrc` / `~/.config/fish/config.fish`). Idempotent — re-running is safe. Skipping the dialogs leaves the manual one-liner instructions intact.
 
@@ -154,7 +156,8 @@ Initial public release.
 - DECSTBM-pinned status bar.
 - Cross-platform packaging (`npm pack` + per-OS installer scripts).
 
-[Unreleased]: https://github.com/EsteSystems/dsc/compare/v0.4.0...HEAD
+[Unreleased]: https://github.com/EsteSystems/dsc/compare/v0.4.1...HEAD
+[0.4.1]: https://github.com/EsteSystems/dsc/compare/v0.4.0...v0.4.1
 [0.4.0]: https://github.com/EsteSystems/dsc/compare/v0.3.0...v0.4.0
 [0.3.0]: https://github.com/EsteSystems/dsc/compare/v0.2.5...v0.3.0
 [0.2.5]: https://github.com/EsteSystems/dsc/compare/v0.2.4...v0.2.5
