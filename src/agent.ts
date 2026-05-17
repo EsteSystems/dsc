@@ -10,7 +10,6 @@ import {
 } from "./api.js";
 import { READ_ONLY_TOOLS, TOOL_SCHEMAS, executeTool, type ToolContext } from "./tools.js";
 import { Spinner } from "./ui.js";
-import { MarkdownRenderer } from "./markdown.js";
 import { buildSystemPrompt } from "./prompt.js";
 
 /**
@@ -88,10 +87,12 @@ function streamHandlers(
     };
   }
 
-  // Stdout path (REPL): existing terminal-rendering behavior.
+  // Stdout path: used by `dsc "prompt"` one-shot mode. The interactive
+  // TUI always passes `events`, so this branch never runs there. Output
+  // is plain text — no ANSI markdown styling — because one-shot output
+  // typically gets piped to other tools where escape codes are noise.
   let contentStarted = false;
   let reasoningStarted = false;
-  const renderer = new MarkdownRenderer();
 
   return {
     onContent: (text: string) => {
@@ -105,7 +106,7 @@ function streamHandlers(
         process.stdout.write(`${BOLD}${assistantLabel}${RESET} `);
         contentStarted = true;
       }
-      process.stdout.write(renderer.push(text));
+      process.stdout.write(text);
     },
     onReasoning: (text: string) => {
       spinner.bump();
@@ -121,7 +122,6 @@ function streamHandlers(
     },
     flush: () => {
       if (contentStarted) {
-        process.stdout.write(renderer.flush());
         process.stdout.write("\n");
       } else if (reasoningStarted) {
         process.stdout.write(`${RESET}\n`);

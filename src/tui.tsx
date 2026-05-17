@@ -51,11 +51,17 @@ interface CliParse {
   version?: boolean;
   yolo?: boolean;
   noResume?: boolean;
+  resume?: boolean;
+  resumeId?: string;
+  model?: Model;
+  modelExplicit?: boolean;
 }
 
-// Minimal arg parsing for the TUI entry. Mirrors the subset of flags the
-// REPL accepts that meaningfully affect a one-shot turn. Anything fancier
-// (e.g. --model, --resume <id>) still has to go through --repl for now.
+class CliError extends Error {}
+
+// Full arg parsing for the TUI entry — this is the only entry point now
+// that the readline REPL is gone. Anything the old REPL accepted needs to
+// be handled here.
 function parseArgs(argv: string[]): CliParse {
   const out: CliParse = {};
   const positional: string[] = [];
@@ -65,9 +71,24 @@ function parseArgs(argv: string[]): CliParse {
     else if (a === "--help" || a === "-h") out.help = true;
     else if (a === "--yolo" || a === "-y") out.yolo = true;
     else if (a === "--no-resume") out.noResume = true;
-    else if (a.startsWith("-")) {
-      // Unknown flags fall through silently — bin routes --repl-only flags
-      // (--model, --resume <id>) to index.ts instead.
+    else if (a === "--resume") {
+      const v = argv[i + 1];
+      if (v && !v.startsWith("-")) {
+        out.resumeId = v;
+        i++;
+      }
+      out.resume = true;
+    } else if (a === "--model" || a === "-m") {
+      const v = argv[++i];
+      if (!AVAILABLE_MODELS.includes(v as Model)) {
+        throw new CliError(
+          `unknown model: ${v} (available: ${AVAILABLE_MODELS.join(", ")})`,
+        );
+      }
+      out.model = v as Model;
+      out.modelExplicit = true;
+    } else if (a.startsWith("-")) {
+      throw new CliError(`unknown flag: ${a}`);
     } else positional.push(a);
   }
   if (positional.length) out.prompt = positional.join(" ");
@@ -75,7 +96,16 @@ function parseArgs(argv: string[]): CliParse {
 }
 
 async function main() {
-  const cli = parseArgs(process.argv.slice(2));
+  let cli: CliParse;
+  try {
+    cli = parseArgs(process.argv.slice(2));
+  } catch (e) {
+    if (e instanceof CliError) {
+      process.stderr.write(`${e.message}\n`);
+      process.exit(2);
+    }
+    throw e;
+  }
 
   if (cli.version) {
     process.stdout.write(formatVersionInfo() + "\n");
@@ -84,20 +114,19 @@ async function main() {
   if (cli.help) {
     process.stdout.write(
       [
-        "dsc — CLI coding agent for DeepSeek (TUI)",
+        "dsc — CLI coding agent for DeepSeek",
         "",
         "Usage:",
-        "  dsc                       Start the TUI",
-        "  dsc \"your prompt here\"    One-shot: run and exit",
-        "  dsc --repl                Use the readline REPL instead",
+        "  dsc                            Start the TUI",
+        "  dsc \"your prompt here\"         One-shot: run and exit",
         "",
-        "Flags handled here:",
-        "  -y, --yolo                Skip approval prompts",
-        "      --no-resume           Don't auto-resume the latest session",
-        "  -v, --version             Print version and exit",
-        "  -h, --help                Show this help",
-        "",
-        "All other flags (--model, --resume <id>) go through --repl.",
+        "Flags:",
+        "  -m, --model <name>             " + AVAILABLE_MODELS.join(" | "),
+        "  -y, --yolo                     Skip approval prompts",
+        "      --no-resume                Don't auto-resume the latest session",
+        "      --resume [id]              Resume the most recent (or by id)",
+        "  -v, --version                  Print version and exit",
+        "  -h, --help                     Show this help",
       ].join("\n") + "\n",
     );
     process.exit(0);
@@ -112,9 +141,18 @@ async function main() {
   const cwd = process.cwd();
   await history.migrateLegacyIfPresent(cwd, DEFAULT_MODEL);
 
-  // Auto-resume most recent for cwd unless --no-resume; otherwise fresh.
   let session = history.newSession(cwd, DEFAULT_MODEL);
-  if (!cli.noResume) {
+  if (cli.resumeId) {
+    // Explicit --resume <id>: load that session by id, error out if it
+    // doesn't exist rather than silently falling back to a new session.
+    const loaded = await history.loadSession(cli.resumeId);
+    if (!loaded) {
+      process.stderr.write(`session not found: ${cli.resumeId}\n`);
+      process.exit(1);
+    }
+    session = loaded;
+  } else if (!cli.noResume) {
+    // Auto-resume most recent for this cwd; otherwise fresh.
     const target = await history.mostRecentForCwd(cwd);
     if (target) {
       const loaded = await history.loadSession(target.id);
@@ -126,7 +164,10 @@ async function main() {
   // out for the new session's arrays without restarting the process.
   let messages: Message[] = session.messages;
   let stats = session.stats;
-  let model: Model = session.model;
+  // --model on the command line overrides the session's stored model.
+  // Without --model, the session's model wins so resuming preserves what
+  // the user picked last time.
+  let model: Model = cli.modelExplicit && cli.model ? cli.model : session.model;
   const initialAutoContinue = Number(process.env.DSC_AUTO_CONTINUE ?? "0") || 0;
 
   const toolCtx: ToolContext = {

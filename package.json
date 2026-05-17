@@ -8,7 +8,7 @@
     "agent",
     "cli",
     "coding-assistant",
-    "repl",
+    "tui",
     "tools"
   ],
   "author": "Este Systems <contact@este.systems>",
@@ -33,11 +33,10 @@
     "LICENSE"
   ],
   "scripts": {
-    "dev": "tsx src/index.ts",
-    "dev:tui": "tsx src/tui.tsx",
+    "dev": "tsx src/tui.tsx",
     "build": "tsc -p .",
     "typecheck": "tsc -p . --noEmit",
-    "start": "node dist/index.js",
+    "start": "node dist/tui.js",
     "package": "node scripts/package.mjs",
     "prepack": "node scripts/build.mjs"
   },

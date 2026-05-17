@@ -8,11 +8,11 @@
 A CLI coding agent for [DeepSeek](https://api-docs.deepseek.com/).
 Streams responses, calls tools (`bash`, `read_file`, `write_file`, `edit_file`,
 `grep`, `glob`, `web_fetch`, `web_search`, `task_*`), keeps per-cwd sessions,
-and runs as a [ink](https://github.com/vadimdemedes/ink)-based TUI by default
-— prompt + status bar pinned at the bottom, finalized turns kept in normal
-scrollback so they stay selectable and copy/paste-able. A readline REPL is
-still available via `--repl` for scripted one-shots or terminals that don't
-like ink.
+and runs as a [ink](https://github.com/vadimdemedes/ink)-based TUI — prompt +
+status bar pinned at the bottom, finalized turns kept in normal scrollback so
+they stay selectable and copy/paste-able. One-shot mode (`dsc "prompt"`) runs
+the agent against stdout and exits without rendering ink, so it pipes cleanly
+into scripts.
 
 ## Install
 
@@ -225,9 +225,8 @@ dsc                                  # interactive TUI
 dsc "summarize src/api.ts"           # one-shot (runs and exits)
 dsc --yolo "rename Foo to Bar"       # skip approval prompts
 dsc --no-resume                      # fresh session, ignore prior history
-dsc --repl                           # readline REPL instead of TUI
-dsc --repl -m deepseek-v4-flash      # REPL-only: pick a model
-dsc --repl --resume <id>             # REPL-only: resume a specific session
+dsc -m deepseek-v4-flash             # pick a model for this launch
+dsc --resume <id>                    # resume a specific session by id
 ```
 
 ## TUI layout
@@ -261,9 +260,8 @@ until you answer.
 
 ## Slash commands
 
-Available in both the TUI and the `--repl` REPL. Type `/` and TAB completes
-to the longest unique prefix; an inline dim ghost-text suggestion previews
-the match as you type.
+Type `/` and TAB completes to the longest unique prefix; an inline dim
+ghost-text suggestion previews the match as you type.
 
 | Command | What it does |
 |---|---|
@@ -310,7 +308,7 @@ paste-heavy drafts, use `/edit`.
 
 | Key | Where | What |
 |---|---|---|
-| `Up` / `Down` | Prompt | Recall past prompts (persisted across sessions and across TUI ↔ REPL). |
+| `Up` / `Down` | Prompt | Recall past prompts (persisted across sessions in `~/.local/state/dsc/history`). |
 | `Tab` | Prompt | Complete a partial `/slash` command. The TUI also previews the match as dim ghost text inline. |
 | `Ctrl+A` / `Ctrl+E` | Prompt | Cursor to start / end of line. |
 | `Ctrl+U` / `Ctrl+K` | Prompt | Delete to start / end of line. |
@@ -565,8 +563,7 @@ Source layout:
 
 ```
 src/
-  tui.tsx           # TUI entry: arg parsing, session + agent wiring, slash dispatcher
-  index.ts          # readline REPL entry (--repl)
+  tui.tsx           # entry: arg parsing, session + agent wiring, slash dispatcher
   agent.ts          # tool-call loop, AgentEvents emitter, repair logic
   api.ts            # DeepSeek client, retry/abort, prompt cache rates, saveApiKey
   tools.ts          # tool schemas + executors (read/write/edit/bash/grep/glob/web_*/task_*)
@@ -575,12 +572,11 @@ src/
   search.ts         # Brave / Tavily / DDG dispatch
   compact.ts        # /compact summarization routine
   history.ts        # session save/load/list, /export, /import, migrate-legacy
-  repl_history.ts   # ~/.local/state/dsc/history reader/writer (shared)
-  markdown.ts       # REPL streaming markdown→ANSI renderer
-  ui.ts             # REPL: Spinner with stall detection; DECSTBM StatusBar
+  repl_history.ts   # ~/.local/state/dsc/history reader/writer (prompt recall)
+  ui.ts             # Spinner used by one-shot mode
   prompt.ts         # SYSTEM_PROMPT + buildSystemPrompt
-  editor.ts         # $EDITOR launcher (shared by /edit in both front-ends)
-  slash.ts          # SLASH_COMMANDS list + TAB-completion helper (shared)
+  editor.ts         # $EDITOR launcher for /edit
+  slash.ts          # SLASH_COMMANDS list + TAB-completion helper
   store.ts          # TUI pub/sub state container (history, agentTasks, queue, etc.)
   update.ts         # npm registry probe + `npm install -g` runner for /update
   clipboard.ts      # cross-platform clipboard write (pbcopy / clip / wl-copy / xclip / xsel)
@@ -599,9 +595,10 @@ src/
     useStore.ts          # selector + equality hook over store.ts
 ```
 
-The agent loop in `agent.ts` is shared between front-ends. When called
-with an `events` callback set it emits structured events (assistant
-start/content/reasoning/final, tool start/end, notice) that the TUI
-pipes into the store; when called without `events` it writes the same
-information directly to stdout — that's what the REPL and the TUI
-one-shot mode use.
+The agent loop in `agent.ts` supports two output modes via a single
+flag. With an `events` callback set (the interactive TUI), it emits
+structured events — assistant start/content/reasoning/final, tool
+start/end, notice — that the TUI pipes into the store. Without
+`events` (one-shot mode), it writes the same information directly to
+stdout as plain text. Same loop, same tool plumbing, just two thin
+output adapters.

@@ -12,18 +12,9 @@ const pkgRoot = dirname(here);
 const tsxBin = join(pkgRoot, "node_modules", ".bin", "tsx");
 const tsxBinCmd = process.platform === "win32" ? tsxBin + ".cmd" : tsxBin;
 
-// Pick the entry. TUI (ink) is the default and handles its own one-shot
-// mode now (`dsc "prompt"` runs the agent against stdout and exits without
-// ever rendering ink). `--repl` opts into the readline REPL when the user
-// explicitly wants it.
 const argv = process.argv.slice(2);
-const wantsRepl = argv.includes("--repl");
-const filteredArgv = argv.filter((a) => a !== "--repl");
-
-const entryName = wantsRepl ? "index" : "tui";
-const srcEntry = join(pkgRoot, "src", wantsRepl ? "index.ts" : "tui.tsx");
-const distEntry = join(pkgRoot, "dist", `${entryName}.js`);
-
+const srcEntry = join(pkgRoot, "src", "tui.tsx");
+const distEntry = join(pkgRoot, "dist", "tui.js");
 const tsxAvailable = existsSync(tsxBin) || existsSync(tsxBinCmd);
 
 if (tsxAvailable && existsSync(srcEntry)) {
@@ -33,7 +24,7 @@ if (tsxAvailable && existsSync(srcEntry)) {
   // might contain spaces (e.g. paths in C:\Program Files\...).
   const child = spawn(
     process.platform === "win32" ? tsxBinCmd : tsxBin,
-    [srcEntry, ...filteredArgv],
+    [srcEntry, ...argv],
     { stdio: "inherit", shell: process.platform === "win32" },
   );
   child.on("exit", (code, signal) => {

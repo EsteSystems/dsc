@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Removed
+- The readline REPL is gone. The TUI has been the default entry for five releases; the `--repl` opt-out and its supporting code (`src/index.ts`, the DECSTBM `StatusBar` in `src/ui.ts`, the streaming markdown→ANSI renderer in `src/markdown.ts`) are deleted. One-shot mode (`dsc "prompt"`) is unchanged — the TUI's stdout adapter still handles it.
+
+### Changed
+- `bin/dsc.mjs` always routes to `src/tui.tsx` now; the `--repl` branch is gone.
+- TUI's arg parser absorbs the flags the REPL used to handle: `--model` / `-m <name>` and `--resume [id]`. Unknown flags now error with a clear message instead of being silently ignored.
+- One-shot output is plain text — the agent no longer routes its stdout writes through the ANSI markdown renderer. Cleaner pipes; fewer escape codes in scripted use.
+
 ## [0.3.0] - 2026-05-17
 
 ### Added
