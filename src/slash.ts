@@ -24,7 +24,7 @@ export const SLASH_COMMANDS: ReadonlyArray<string> = [
   "rename",
   "resume",
   "save",
-  "search-key",
+  "search",
   "transcript",
   "update",
   "version",

@@ -20,10 +20,11 @@ import {
   recordUsage,
   saveApiKey,
   saveSearchKey,
+  saveSearchProvider,
   type Message,
   type Model,
 } from "./api.js";
-import { getProviderKey } from "./search.js";
+import { getProvider, getProviderKey } from "./search.js";
 import { loadInstructions } from "./instructions.js";
 import {
   runAgent,
@@ -567,7 +568,7 @@ async function main() {
             "/export [path]          write current session JSON for transfer",
             "/import <path>          load session JSON; rebinds cwd here (--keep-cwd to skip)",
             "/api-key [key]          show source / save api key to config file",
-            "/search-key [p] [key]   show search-provider keys / save brave|tavily key",
+            "/search [use|key] …     show / switch search provider / save brave|tavily key",
             "/update                 check npm for a newer dsc and install it",
             "/exit                   exit",
           ].join("\n"),
@@ -959,68 +960,108 @@ async function main() {
         }
         return true;
       }
-      case "search-key": {
-        // /search-key                            -> list providers + status + URLs
-        // /search-key <provider>                 -> show that provider's status + URL
-        // /search-key <provider> <key>           -> save it to config
-        const tokens = arg.trim().split(/\s+/).filter(Boolean);
-        const [providerArg, ...keyParts] = tokens;
-        const keyArg = keyParts.join(" ");
+      case "search": {
+        // /search                          -> full status
+        // /search use <provider>           -> set active provider in config
+        // /search key <provider>           -> show that provider's status + URL
+        // /search key <provider> <key>     -> save it to config
         const SIGNUP: Record<"brave" | "tavily", string> = {
           brave: "https://api-dashboard.search.brave.com/app/keys",
           tavily: "https://app.tavily.com/",
         };
-        const ENV_VAR: Record<"brave" | "tavily", string> = {
+        const ENV_KEY: Record<"brave" | "tavily", string> = {
           brave: "BRAVE_API_KEY",
           tavily: "TAVILY_API_KEY",
         };
-        const sourceFor = (p: "brave" | "tavily"): "env" | "file" | null => {
-          if (process.env[ENV_VAR[p]]) return "env";
+        const keySourceFor = (p: "brave" | "tavily"): "env" | "file" | null => {
+          if (process.env[ENV_KEY[p]]) return "env";
           return getProviderKey(p) ? "file" : null;
         };
-        const lineFor = (p: "brave" | "tavily"): string => {
-          const src = sourceFor(p);
+        const keyStatusLine = (p: "brave" | "tavily"): string => {
+          const src = keySourceFor(p);
           const status =
             src === "env"
-              ? `set via $${ENV_VAR[p]}`
+              ? `set via $${ENV_KEY[p]}`
               : src === "file"
                 ? "stored in config"
                 : "not set";
           return `  ${p}: ${status}  —  ${SIGNUP[p]}`;
         };
 
-        if (!providerArg) {
+        const tokens = arg.trim().split(/\s+/).filter(Boolean);
+        const sub = tokens[0];
+
+        // No subcommand: full status.
+        if (!sub) {
+          const active = getProvider();
+          const activeSrc = process.env.DSC_SEARCH_PROVIDER
+            ? "set via $DSC_SEARCH_PROVIDER"
+            : "from config";
           info(
             [
-              "search providers:",
-              lineFor("brave"),
-              lineFor("tavily"),
+              `active provider: ${active}  (${activeSrc})`,
               "",
-              "To save a key: /search-key <provider> <key>",
-              "Pick the active provider with DSC_SEARCH_PROVIDER or `search.provider` in the config.",
+              "keys:",
+              keyStatusLine("brave"),
+              keyStatusLine("tavily"),
+              "  ddg: no key needed (DuckDuckGo HTML scrape)",
+              "",
+              "Subcommands:",
+              "  /search use <brave|tavily|ddg>      switch active provider",
+              "  /search key <provider> [key]        show or save api key",
             ].join("\n"),
           );
           return true;
         }
 
-        if (providerArg !== "brave" && providerArg !== "tavily") {
-          info(
-            `error: unknown provider '${providerArg}' (expected: brave | tavily)`,
-          );
+        if (sub === "use") {
+          const name = tokens[1];
+          if (!name || (name !== "brave" && name !== "tavily" && name !== "ddg")) {
+            info("error: usage: /search use <brave|tavily|ddg>");
+            return true;
+          }
+          try {
+            const written = await saveSearchProvider(name);
+            // Warn the user if they just selected a provider whose key
+            // isn't configured — they'll otherwise hit a 401 on the next
+            // web_search and wonder why.
+            const needsKey = name === "brave" || name === "tavily";
+            const haveKey = needsKey ? !!keySourceFor(name) : true;
+            const warn = needsKey && !haveKey
+              ? `\n(warning) ${name} has no key set. Run: /search key ${name} <key>`
+              : "";
+            info(`active search provider → ${name}  (saved to ${written})${warn}`);
+          } catch (e) {
+            info(`error: ${(e as Error).message}`);
+          }
           return true;
         }
 
-        if (!keyArg) {
-          info(`${providerArg}: ${sourceFor(providerArg) ?? "not set"}\nsignup: ${SIGNUP[providerArg]}`);
+        if (sub === "key") {
+          const name = tokens[1];
+          const keyValue = tokens.slice(2).join(" ");
+          if (!name || (name !== "brave" && name !== "tavily")) {
+            info("error: usage: /search key <brave|tavily> [key]");
+            return true;
+          }
+          if (!keyValue) {
+            info(
+              `${name}: ${keySourceFor(name) ?? "not set"}\nsignup: ${SIGNUP[name]}`,
+            );
+            return true;
+          }
+          try {
+            const written = await saveSearchKey(name, keyValue);
+            info(`${name} key saved to ${written}`);
+          } catch (e) {
+            info(`error: ${(e as Error).message}`);
+          }
           return true;
         }
 
-        try {
-          const written = await saveSearchKey(providerArg, keyArg);
-          info(`${providerArg} key saved to ${written}`);
-        } catch (e) {
-          info(`error: ${(e as Error).message}`);
-        }
+        info(
+          `error: unknown subcommand '${sub}' (expected: use | key, or no arg for status)`,
+        );
         return true;
       }
       case "audit": {

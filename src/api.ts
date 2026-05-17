@@ -229,6 +229,47 @@ export async function saveApiKey(key: string): Promise<string> {
 }
 
 /**
+ * Set the active search provider in the config file. Writes
+ * `search.provider` while preserving any other fields (per-provider
+ * keys, etc). Use `null` / undefined to clear back to the default.
+ */
+export async function saveSearchProvider(
+  provider: "brave" | "tavily" | "ddg",
+): Promise<string> {
+  const p = configPath();
+  await fsp.mkdir(nodePath.dirname(p), { recursive: true });
+
+  let existing: Record<string, unknown> = {};
+  try {
+    let txt = await fsp.readFile(p, "utf8");
+    if (txt.charCodeAt(0) === 0xfeff) txt = txt.slice(1);
+    const parsed = JSON.parse(txt);
+    if (parsed && typeof parsed === "object") {
+      existing = parsed as Record<string, unknown>;
+    }
+  } catch {
+    // missing or unparseable — start fresh
+  }
+  const search =
+    existing.search && typeof existing.search === "object"
+      ? (existing.search as Record<string, unknown>)
+      : {};
+  search.provider = provider;
+  existing.search = search;
+
+  await fsp.writeFile(p, JSON.stringify(existing, null, 2), {
+    encoding: "utf8",
+    mode: 0o600,
+  });
+  try {
+    await fsp.chmod(p, 0o600);
+  } catch {}
+
+  _cachedConfig = undefined;
+  return p;
+}
+
+/**
  * Save a search-provider key (brave/tavily) into the config file.
  * Merges into `search.<provider>.api_key`, preserving any other fields
  * already in `search` (e.g. `provider`, the *other* provider's key).

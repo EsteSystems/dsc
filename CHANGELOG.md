@@ -7,6 +7,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+- `/search-key` is replaced by `/search` with subcommands. `/search` prints the active provider + per-provider key status + signup URLs. `/search use <brave|tavily|ddg>` writes `search.provider` to the config. `/search key <provider> [key]` shows or saves a key. The old half-feature (you could save a key but not switch provider without editing the JSON) is gone.
+
 ## [0.5.0] - 2026-05-18
 
 ### Added
