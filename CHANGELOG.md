@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.5.0] - 2026-05-18
+
 ### Added
 - Per-project instructions overlay. dsc now appends content from `~/.config/dsc/instructions.md` (user-global), `AGENTS.md` (project, walked up from cwd, shared with other agents), and `.dsc/instructions.md` (project, dsc-only) to the system prompt every turn. Each file gets its own labeled section so the model knows the source; the dsc-specific one appears last and effectively wins on conflict. Files re-read per turn — edits land in the next request.
 - `/instructions` slash command lists the active overlays and shows their content; the TUI also prints a one-line summary at session start when any are present.
@@ -160,7 +162,8 @@ Initial public release.
 - DECSTBM-pinned status bar.
 - Cross-platform packaging (`npm pack` + per-OS installer scripts).
 
-[Unreleased]: https://github.com/EsteSystems/dsc/compare/v0.4.1...HEAD
+[Unreleased]: https://github.com/EsteSystems/dsc/compare/v0.5.0...HEAD
+[0.5.0]: https://github.com/EsteSystems/dsc/compare/v0.4.1...v0.5.0
 [0.4.1]: https://github.com/EsteSystems/dsc/compare/v0.4.0...v0.4.1
 [0.4.0]: https://github.com/EsteSystems/dsc/compare/v0.3.0...v0.4.0
 [0.3.0]: https://github.com/EsteSystems/dsc/compare/v0.2.5...v0.3.0
