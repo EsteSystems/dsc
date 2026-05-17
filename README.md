@@ -265,7 +265,8 @@ ghost-text suggestion previews the match as you type.
 
 | Command | What it does |
 |---|---|
-| `/api-key [key]` | Show where the key is loaded from (env / config file / unset). With a key arg, write it to `~/.config/deepseek/deepseek.json` with `0600` perms. |
+| `/api-key [key]` | Show where the key is loaded from (env / config file / unset). With a key arg, write it to `~/.config/deepseek/deepseek.json` with `0600` perms. When unset, prints the DeepSeek signup URL. |
+| `/search-key [provider] [key]` | Show / save search-provider keys. No-arg lists `brave` and `tavily` with status + signup URLs. With a provider, shows just that one. With a key, saves under `search.<provider>.api_key`. |
 | `/update` | Force-check npm for a newer release and install it (`npm install -g @este.systems/dsc@latest`). The TUI also checks once a day in the background and surfaces a one-line "X available" notice when behind. |
 | `/copy` | Copy the most recent assistant response to the OS clipboard (pbcopy / clip / wl-copy / xclip / xsel). |
 | `/export [path]` | Write the current session JSON to `path` (default: cwd, with a `<name|id>-<date>.json` filename). |
