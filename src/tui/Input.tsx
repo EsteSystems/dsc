@@ -177,6 +177,37 @@ export function Input({ value, onChange, onSubmit, focus, history = [] }: Props)
   const at = value[cursor] ?? " ";
   const post = value.slice(cursor + 1);
 
+  // Ghost-text suggestion: when typing a /slash command and the cursor is
+  // at the end, show what TAB would complete to as dim suffix. Skip when
+  // a multiline buffer continuation is active or when the cursor isn't at
+  // the end (mid-edit completions would look like the cursor jumped).
+  const isAtEnd = cursor === value.length;
+  let ghost = "";
+  if (isAtEnd && value.startsWith("/")) {
+    const { completion } = completeSlash(value);
+    if (completion && completion.startsWith(value) && completion.length > value.length) {
+      ghost = completion.slice(value.length);
+    }
+  }
+
+  if (ghost) {
+    // Render the cursor on top of the first ghost char so the user sees
+    // "press TAB to take this" with the caret positioned to commit.
+    return (
+      <Text>
+        {pre}
+        {focus ? (
+          <Text inverse dimColor>
+            {ghost[0]}
+          </Text>
+        ) : (
+          <Text dimColor>{ghost[0]}</Text>
+        )}
+        <Text dimColor>{ghost.slice(1)}</Text>
+      </Text>
+    );
+  }
+
   return (
     <Text>
       {pre}

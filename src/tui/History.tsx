@@ -30,7 +30,7 @@ export function MessageRow({ message: m, streaming = false }: MessageRowProps) {
     return (
       <Box marginBottom={1}>
         <Text dimColor>
-          {label}: {truncate(m.content, 600)}
+          {label}: {toolTruncate(m.content, 600)}
         </Text>
       </Box>
     );
@@ -97,4 +97,17 @@ export function MessageRow({ message: m, streaming = false }: MessageRowProps) {
 
 function truncate(s: string, n: number): string {
   return s.length <= n ? s : s.slice(0, n) + "…";
+}
+
+// Tool-result truncation. The model sees the full output (it's stored as
+// the tool message's content); the TUI just renders a head slice so the
+// dynamic frame stays readable. The marker explains the gap so the user
+// knows nothing was silently lost from the model's perspective.
+function toolTruncate(s: string, maxChars: number): string {
+  if (s.length <= maxChars) return s;
+  const head = s.slice(0, maxChars);
+  const omittedChars = s.length - maxChars;
+  const omittedLines = s.slice(maxChars).split("\n").length - 1;
+  const lineHint = omittedLines > 0 ? ` / ${omittedLines} more lines` : "";
+  return `${head}\n… (${omittedChars} more chars${lineHint}, full output sent to model)`;
 }
