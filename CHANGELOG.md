@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.4.0] - 2026-05-17
+
 ### Added
 - `/search-key [provider] [key]` — list/save search-provider API keys (Brave, Tavily) and print signup URLs so the user knows where to get one. Mirrors `/api-key`'s shape.
 - `/api-key` and the welcome panel now point at https://platform.deepseek.com/api_keys when no DeepSeek key is configured.
@@ -145,7 +147,8 @@ Initial public release.
 - DECSTBM-pinned status bar.
 - Cross-platform packaging (`npm pack` + per-OS installer scripts).
 
-[Unreleased]: https://github.com/EsteSystems/dsc/compare/v0.3.0...HEAD
+[Unreleased]: https://github.com/EsteSystems/dsc/compare/v0.4.0...HEAD
+[0.4.0]: https://github.com/EsteSystems/dsc/compare/v0.3.0...v0.4.0
 [0.3.0]: https://github.com/EsteSystems/dsc/compare/v0.2.5...v0.3.0
 [0.2.5]: https://github.com/EsteSystems/dsc/compare/v0.2.4...v0.2.5
 [0.2.4]: https://github.com/EsteSystems/dsc/compare/v0.2.3...v0.2.4
