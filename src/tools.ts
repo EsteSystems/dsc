@@ -260,6 +260,25 @@ function withLineNumbers(text: string, offset = 1): string {
   return lines.map((l, i) => `${String(offset + i).padStart(width, " ")}\t${l}`).join("\n");
 }
 
+// On Windows, child.kill() only terminates cmd.exe; any grandchildren it
+// spawned (npm, vite, tsx workers) inherit stdio and keep running. taskkill
+// /T walks the process tree by PPID and ends the whole family; /F is the
+// unconditional kill. No-op on non-Windows and when pid is missing. We
+// swallow errors so a missing/blocked taskkill doesn't hang the caller —
+// in every call site there's a follow-up child.kill() as the fallback.
+function killWindowsTree(pid: number | undefined): void {
+  if (process.platform !== "win32" || pid === undefined) return;
+  try {
+    spawnSync("taskkill", ["/pid", String(pid), "/t", "/f"], {
+      stdio: "ignore",
+      windowsHide: true,
+      timeout: 5_000,
+    });
+  } catch {
+    // Nothing useful to do; the caller's child.kill() is the fallback.
+  }
+}
+
 export async function executeTool(
   name: string,
   argsJson: string,
@@ -514,10 +533,12 @@ async function runBash(
 
     const timer = setTimeout(() => {
       timedOut = true;
+      killWindowsTree(child.pid);
       child.kill("SIGKILL");
     }, timeoutMs);
     const onAbort = () => {
       interrupted = true;
+      killWindowsTree(child.pid);
       child.kill("SIGTERM");
     };
     if (signal) {
@@ -566,6 +587,10 @@ async function runBash(
     clearTimeout(graceTimer);
     child.on("exit", (code) => {
       graceTimer = setTimeout(() => {
+        // close didn't fire in time — clean exit but stray grandchildren
+        // are holding stdio open. Kill the tree so they don't keep working
+        // after we return "done" to the agent.
+        killWindowsTree(child.pid);
         // Detach our listeners on the stdio streams so leftover data from
         // grandchildren doesn't keep this process tree alive.
         try {
