@@ -44,6 +44,13 @@ be hacking on the source.
 npm install -g @este.systems/dsc
 ```
 
+After install, run `dsc`. On a fresh machine the TUI greets you with a
+one-time welcome card and points you at `/api-key sk-...` for the
+initial key save. To upgrade later, run `/update` inside the TUI (or
+`npm install -g @este.systems/dsc@latest` from outside) — dsc also
+checks npm in the background once a day and surfaces a one-line notice
+when a newer version is published.
+
 **(B) From a local tarball** *(works on all platforms with the same npm)*:
 
 ```sh
@@ -94,8 +101,21 @@ to your `PATH` and reopen the terminal.
 
 ## API key
 
-A ready-to-edit template lives at the repo root: **[`deepseek.json.example`](deepseek.json.example)**.
-Copy it to the config path below and replace the placeholder values:
+**Easiest path** — launch dsc and use the slash command:
+
+```
+> /api-key sk-...
+```
+
+That writes `~/.config/deepseek/deepseek.json` with `0600` perms,
+preserving any other fields (e.g. search-provider keys) already in the
+file. You can also set `$DEEPSEEK_API_KEY` in your shell — it takes
+priority over the file.
+
+The rest of this section walks through the manual file setup if you'd
+rather do it yourself. A ready-to-edit template lives at the repo
+root: **[`deepseek.json.example`](deepseek.json.example)**. Copy it to
+the config path below and replace the placeholder values:
 
 ```sh
 # Linux / macOS:
@@ -241,12 +261,18 @@ until you answer.
 
 ## Slash commands
 
-Available in both the TUI and the `--repl` REPL. Type `/` and TAB cycles
-through completions.
+Available in both the TUI and the `--repl` REPL. Type `/` and TAB completes
+to the longest unique prefix; an inline dim ghost-text suggestion previews
+the match as you type.
 
 | Command | What it does |
 |---|---|
-| `/clear` | Start a new session. Old session stays on disk. |
+| `/api-key [key]` | Show where the key is loaded from (env / config file / unset). With a key arg, write it to `~/.config/deepseek/deepseek.json` with `0600` perms. |
+| `/update` | Force-check npm for a newer release and install it (`npm install -g @este.systems/dsc@latest`). The TUI also checks once a day in the background and surfaces a one-line "X available" notice when behind. |
+| `/copy` | Copy the most recent assistant response to the OS clipboard (pbcopy / clip / wl-copy / xclip / xsel). |
+| `/export [path]` | Write the current session JSON to `path` (default: cwd, with a `<name|id>-<date>.json` filename). |
+| `/import <path> [--keep-cwd]` | Load a session from a JSON file as the active session. Rebinds cwd to the current directory by default so auto-resume picks it up here; `--keep-cwd` preserves the original. Mints a fresh id on collision (no overwrites). |
+| `/clear` | Start a new session. Old session stays on disk. Also drops per-tool "always" approvals. |
 | `/cost` | Show token usage and estimated cost so far. |
 | `/model [name]` | Show or switch model. Available: `deepseek-v4-pro`, `deepseek-v4-flash`. |
 | `/yolo` | Toggle approval mode (write/edit/bash/web_fetch). |
@@ -285,15 +311,26 @@ paste-heavy drafts, use `/edit`.
 | Key | Where | What |
 |---|---|---|
 | `Up` / `Down` | Prompt | Recall past prompts (persisted across sessions and across TUI ↔ REPL). |
-| `Tab` | Prompt | Complete a partial `/slash` command. |
+| `Tab` | Prompt | Complete a partial `/slash` command. The TUI also previews the match as dim ghost text inline. |
 | `Ctrl+A` / `Ctrl+E` | Prompt | Cursor to start / end of line. |
 | `Ctrl+U` / `Ctrl+K` | Prompt | Delete to start / end of line. |
 | `Ctrl+W` | Prompt | Delete the word before the cursor. |
+| `y` | Approval | Approve this call. |
+| `a` | Approval | Approve this call **and** auto-approve future calls of the same tool for the rest of this session (cleared by `/clear`). |
+| `n` / `ESC` | Approval | Reject. |
 | `ESC` | Turn busy | Abort the in-flight turn. |
-| `ESC` | Approval | Reject the pending tool call (same as `n`). |
 | `ESC` | Multiline | Clear the accumulated backslash-continuation buffer. |
 | `Ctrl+C` | Turn busy | Abort the in-flight turn. |
 | `Ctrl+C` / `Ctrl+D` | Idle | Exit cleanly. |
+
+### Agent task list
+
+Non-trivial multi-step requests trigger the model to reach for the
+`task_create` / `task_update` / `task_list` tools. The TUI renders the
+list above the prompt as `○ pending` / `◐ in-progress` / `● completed`
+bullets so you can watch the agent's plan execute. Hidden once every
+task is `completed`. Lives only in memory — cleared by `/clear` and on
+exit.
 
 ### Session scoping (per-directory)
 
@@ -331,12 +368,13 @@ the archived messages from `/transcript`.
 | `task_create(subject, activeForm?)` | none | Adds a pending task to the user-visible task list. |
 | `task_update(id, status?, subject?, activeForm?)` | none | Moves a task between pending / in_progress / completed. |
 | `task_list()` | none | Returns the current task list with statuses. |
-| `write_file(path, content)` | yes (unless `--yolo`) | Side-by-side diff in the prompt. |
+| `write_file(path, content)` | yes (unless `--yolo`) | Side-by-side diff inside the approval dialog. |
 | `edit_file(path, old_string, new_string, replace_all?)` | yes | Exact substring replace; old_string must be unique unless `replace_all=true`. |
 | `bash(command, description?, timeout_ms?)` | yes | `/bin/sh` on Linux/macOS, `cmd.exe` on Windows. Output capped at 16 KB. |
 | `web_fetch(url)` | yes | HTML stripped to text, capped at 50 KB. |
 
-Read-only tools never prompt. The rest do unless `--yolo` is on. The
+Read-only tools never prompt. The rest do unless `--yolo` is on or
+you've previously said `a` (always) for that tool this session. The
 `task_*` tools mutate an in-memory list that the TUI renders above the
 prompt; the model is encouraged (via the system prompt) to reach for
 them on non-trivial multi-step asks so the user sees real-time progress.
@@ -525,13 +563,13 @@ src/
   tui.tsx           # TUI entry: arg parsing, session + agent wiring, slash dispatcher
   index.ts          # readline REPL entry (--repl)
   agent.ts          # tool-call loop, AgentEvents emitter, repair logic
-  api.ts            # DeepSeek client, retry/abort, prompt cache rates
+  api.ts            # DeepSeek client, retry/abort, prompt cache rates, saveApiKey
   tools.ts          # tool schemas + executors (read/write/edit/bash/grep/glob/web_*/task_*)
-  approval.ts       # confirmWrite/Edit/Bash/Fetch — pluggable asker
+  approval.ts       # confirm{Write,Edit,Bash,Fetch} + ApprovalPayload + 3-state answer
   audit.ts          # JSONL audit logger
   search.ts         # Brave / Tavily / DDG dispatch
   compact.ts        # /compact summarization routine
-  history.ts        # session save/load/list/migrate-legacy
+  history.ts        # session save/load/list, /export, /import, migrate-legacy
   repl_history.ts   # ~/.local/state/dsc/history reader/writer (shared)
   markdown.ts       # REPL streaming markdown→ANSI renderer
   ui.ts             # REPL: Spinner with stall detection; DECSTBM StatusBar
@@ -539,18 +577,20 @@ src/
   editor.ts         # $EDITOR launcher (shared by /edit in both front-ends)
   slash.ts          # SLASH_COMMANDS list + TAB-completion helper (shared)
   store.ts          # TUI pub/sub state container (history, agentTasks, queue, etc.)
+  update.ts         # npm registry probe + `npm install -g` runner for /update
+  clipboard.ts      # cross-platform clipboard write (pbcopy / clip / wl-copy / xclip / xsel)
   tui/
     App.tsx              # root layout
     History.tsx          # <Static> for finalized turns
     CurrentTurn.tsx      # in-progress streaming message
     Markdown.tsx         # markdown → ink Text-tree (incl. tables)
-    AgentTaskList.tsx    # bullets above the prompt
+    AgentTaskList.tsx    # task_* bullets above the prompt
     QueuedPrompts.tsx    # dim list of pending submissions
     TaskLine.tsx         # "→ tool(...)" indicator while a tool runs
-    StatusBar.tsx        # full-width inverse-video status line
+    StatusBar.tsx        # full-width inverse-video status line w/ busy spinner
     PromptInput.tsx      # backslash-continuation buffer + prompt char
-    Input.tsx            # custom controlled input (cursor, history, TAB)
-    ApprovalDialog.tsx   # yellow-bordered modal for tool approvals
+    Input.tsx            # custom controlled input (cursor, history, TAB + ghost suggest)
+    ApprovalDialog.tsx   # yellow-bordered modal with inline diff/command preview
     useStore.ts          # selector + equality hook over store.ts
 ```
 
