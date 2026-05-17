@@ -517,20 +517,25 @@ The package is configured to publish as `@este.systems/dsc` with public
 access. To release:
 
 ```sh
-# 1. Bump the version (semver). For a pre-1.0 patch:
+# 1. Roll the `## [Unreleased]` section in CHANGELOG.md into a dated
+#    `## [X.Y.Z] - YYYY-MM-DD` header and add the compare link at the
+#    bottom. Commit the changelog edit before npm version so the bump
+#    commit and the changelog entry land in the same release.
+
+# 2. Bump the version (semver). For a pre-1.0 patch:
 npm version patch                       # → 0.1.1, also creates a git tag
 
-# 2. Make sure you're logged in to npm:
+# 3. Make sure you're logged in to npm:
 npm whoami                              # should print your username
 npm login                               # if not
 
-# 3. (Optional) preview the tarball:
+# 4. (Optional) preview the tarball:
 npm pack --dry-run
 
-# 4. Publish:
+# 5. Publish:
 npm publish                             # respects publishConfig.access=public
 
-# 5. Push the version-bump commit and tag:
+# 6. Push the version-bump commit and tag:
 git push --follow-tags
 ```
 
