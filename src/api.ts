@@ -228,6 +228,56 @@ export async function saveApiKey(key: string): Promise<string> {
   return p;
 }
 
+/**
+ * Save a search-provider key (brave/tavily) into the config file.
+ * Merges into `search.<provider>.api_key`, preserving any other fields
+ * already in `search` (e.g. `provider`, the *other* provider's key).
+ * Returns the path written to.
+ */
+export async function saveSearchKey(
+  provider: "brave" | "tavily",
+  key: string,
+): Promise<string> {
+  const trimmed = key.trim();
+  if (!trimmed) throw new DeepSeekError("api key is empty");
+  const p = configPath();
+  await fsp.mkdir(nodePath.dirname(p), { recursive: true });
+
+  let existing: Record<string, unknown> = {};
+  try {
+    let txt = await fsp.readFile(p, "utf8");
+    if (txt.charCodeAt(0) === 0xfeff) txt = txt.slice(1);
+    const parsed = JSON.parse(txt);
+    if (parsed && typeof parsed === "object") {
+      existing = parsed as Record<string, unknown>;
+    }
+  } catch {
+    // missing or unparseable — start fresh
+  }
+  const search =
+    existing.search && typeof existing.search === "object"
+      ? (existing.search as Record<string, unknown>)
+      : {};
+  const sub =
+    search[provider] && typeof search[provider] === "object"
+      ? (search[provider] as Record<string, unknown>)
+      : {};
+  sub.api_key = trimmed;
+  search[provider] = sub;
+  existing.search = search;
+
+  await fsp.writeFile(p, JSON.stringify(existing, null, 2), {
+    encoding: "utf8",
+    mode: 0o600,
+  });
+  try {
+    await fsp.chmod(p, 0o600);
+  } catch {}
+
+  _cachedConfig = undefined;
+  return p;
+}
+
 export async function chat(opts: CallOptions): Promise<ChatResponse> {
   const apiKey = getApiKey();
   const body: Record<string, unknown> = {

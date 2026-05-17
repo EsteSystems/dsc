@@ -19,9 +19,11 @@ import {
   hasApiKey,
   recordUsage,
   saveApiKey,
+  saveSearchKey,
   type Message,
   type Model,
 } from "./api.js";
+import { getProviderKey } from "./search.js";
 import {
   runAgent,
   formatCost,
@@ -556,6 +558,7 @@ async function main() {
             "/export [path]          write current session JSON for transfer",
             "/import <path>          load session JSON; rebinds cwd here (--keep-cwd to skip)",
             "/api-key [key]          show source / save api key to config file",
+            "/search-key [p] [key]   show search-provider keys / save brave|tavily key",
             "/update                 check npm for a newer dsc and install it",
             "/exit                   exit",
           ].join("\n"),
@@ -827,7 +830,7 @@ async function main() {
             info(`api key: stored in ${configPath()}`);
           } else {
             info(
-              `api key: not set\nrun /api-key <key> to save one, or export DEEPSEEK_API_KEY`,
+              `api key: not set\nGet one at https://platform.deepseek.com/api_keys, then run /api-key <key> (or export DEEPSEEK_API_KEY in your shell).`,
             );
           }
           return true;
@@ -835,6 +838,70 @@ async function main() {
         try {
           const written = await saveApiKey(text);
           info(`api key saved to ${written}`);
+        } catch (e) {
+          info(`error: ${(e as Error).message}`);
+        }
+        return true;
+      }
+      case "search-key": {
+        // /search-key                            -> list providers + status + URLs
+        // /search-key <provider>                 -> show that provider's status + URL
+        // /search-key <provider> <key>           -> save it to config
+        const tokens = arg.trim().split(/\s+/).filter(Boolean);
+        const [providerArg, ...keyParts] = tokens;
+        const keyArg = keyParts.join(" ");
+        const SIGNUP: Record<"brave" | "tavily", string> = {
+          brave: "https://api-dashboard.search.brave.com/app/keys",
+          tavily: "https://app.tavily.com/",
+        };
+        const ENV_VAR: Record<"brave" | "tavily", string> = {
+          brave: "BRAVE_API_KEY",
+          tavily: "TAVILY_API_KEY",
+        };
+        const sourceFor = (p: "brave" | "tavily"): "env" | "file" | null => {
+          if (process.env[ENV_VAR[p]]) return "env";
+          return getProviderKey(p) ? "file" : null;
+        };
+        const lineFor = (p: "brave" | "tavily"): string => {
+          const src = sourceFor(p);
+          const status =
+            src === "env"
+              ? `set via $${ENV_VAR[p]}`
+              : src === "file"
+                ? "stored in config"
+                : "not set";
+          return `  ${p}: ${status}  —  ${SIGNUP[p]}`;
+        };
+
+        if (!providerArg) {
+          info(
+            [
+              "search providers:",
+              lineFor("brave"),
+              lineFor("tavily"),
+              "",
+              "To save a key: /search-key <provider> <key>",
+              "Pick the active provider with DSC_SEARCH_PROVIDER or `search.provider` in the config.",
+            ].join("\n"),
+          );
+          return true;
+        }
+
+        if (providerArg !== "brave" && providerArg !== "tavily") {
+          info(
+            `error: unknown provider '${providerArg}' (expected: brave | tavily)`,
+          );
+          return true;
+        }
+
+        if (!keyArg) {
+          info(`${providerArg}: ${sourceFor(providerArg) ?? "not set"}\nsignup: ${SIGNUP[providerArg]}`);
+          return true;
+        }
+
+        try {
+          const written = await saveSearchKey(providerArg, keyArg);
+          info(`${providerArg} key saved to ${written}`);
         } catch (e) {
           info(`error: ${(e as Error).message}`);
         }
@@ -1085,8 +1152,9 @@ async function main() {
     if (startupKeyMissing) {
       lines.push(
         "",
-        `To get started, save your API key:  /api-key sk-...`,
-        `  (or export DEEPSEEK_API_KEY in your shell)`,
+        "To get started, save your API key:",
+        "  /api-key sk-...   (get one at https://platform.deepseek.com/api_keys)",
+        "  or: export DEEPSEEK_API_KEY in your shell",
       );
     }
     info(lines.join("\n"));
