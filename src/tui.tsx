@@ -24,6 +24,7 @@ import {
   type Model,
 } from "./api.js";
 import { getProviderKey } from "./search.js";
+import { loadInstructions } from "./instructions.js";
 import {
   runAgent,
   formatCost,
@@ -558,6 +559,7 @@ async function main() {
             "/cost                   show token usage and cost",
             "/copy                   copy last assistant response to clipboard",
             "/version                show version info",
+            "/instructions           list active per-project / per-user instruction overlays",
             "/compact [keep]         summarize old turns (default keep=4)",
             "/transcript             dump full message log",
             "/audit [path|show N]    audit log info",
@@ -792,6 +794,41 @@ async function main() {
       case "version":
         info(formatVersionInfo());
         return true;
+      case "instructions": {
+        // Show every overlay the agent currently sees, in the order they
+        // appear in the system prompt. Resolved fresh per call so edits
+        // since launch are reflected without restarting dsc.
+        const overlays = loadInstructions(cwd);
+        if (overlays.length === 0) {
+          info(
+            [
+              "No instruction overlays found. dsc looks for:",
+              "  ~/.config/dsc/instructions.md  (user-global)",
+              "  AGENTS.md                      (project, walked up from cwd)",
+              "  .dsc/instructions.md           (project, dsc-specific)",
+              "Create any of these to teach the agent project conventions.",
+            ].join("\n"),
+          );
+          return true;
+        }
+        const sections = overlays.map((ov) => {
+          const label =
+            ov.kind === "user"
+              ? "user"
+              : ov.kind === "agents"
+                ? "AGENTS.md"
+                : ".dsc/instructions.md";
+          const lines = ov.content.split("\n");
+          const head = lines.slice(0, 20);
+          const tail =
+            lines.length > 20
+              ? `\n… (${lines.length - 20} more lines)`
+              : "";
+          return `── ${label} @ ${ov.path} ──\n${head.join("\n")}${tail}`;
+        });
+        info(sections.join("\n\n"));
+        return true;
+      }
       case "update": {
         // Two-phase: check first so we don't run npm install when we're
         // already current. Force-fetches the latest (ignores the 24h cache
@@ -1248,6 +1285,24 @@ async function main() {
     info(
       `No DeepSeek API key found. Run "/api-key <key>" to save one to ${configPath()}, or export DEEPSEEK_API_KEY in your shell.`,
     );
+  }
+
+  // Surface any instruction overlays the agent picked up, so the user
+  // knows project conventions are being injected into the prompt without
+  // having to ask /instructions. Cheap: loadInstructions hits at most
+  // three local files.
+  const overlays = loadInstructions(cwd);
+  if (overlays.length > 0) {
+    const labels = overlays
+      .map((ov) =>
+        ov.kind === "user"
+          ? "user"
+          : ov.kind === "agents"
+            ? "AGENTS.md"
+            : ".dsc/instructions.md",
+      )
+      .join(", ");
+    info(`loaded instruction overlays: ${labels}  (/instructions to inspect)`);
   }
 
   // Fire-and-forget update probe. Uses the 24h cache by default so a

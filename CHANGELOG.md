@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- Per-project instructions overlay. dsc now appends content from `~/.config/dsc/instructions.md` (user-global), `AGENTS.md` (project, walked up from cwd, shared with other agents), and `.dsc/instructions.md` (project, dsc-only) to the system prompt every turn. Each file gets its own labeled section so the model knows the source; the dsc-specific one appears last and effectively wins on conflict. Files re-read per turn — edits land in the next request.
+- `/instructions` slash command lists the active overlays and shows their content; the TUI also prints a one-line summary at session start when any are present.
+
 ## [0.4.1] - 2026-05-17
 
 ### Added

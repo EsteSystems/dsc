@@ -11,6 +11,7 @@ import {
 import { READ_ONLY_TOOLS, TOOL_SCHEMAS, executeTool, type ToolContext } from "./tools.js";
 import { Spinner } from "./ui.js";
 import { buildSystemPrompt } from "./prompt.js";
+import { loadInstructions } from "./instructions.js";
 
 /**
  * Structured events emitted by runAgent. When events is provided on RunOptions,
@@ -173,6 +174,11 @@ export async function runAgent(opts: RunOptions): Promise<void> {
         date: new Date(),
         summary: opts.getSummary?.(),
         language: opts.language,
+        // Re-read on every turn so edits to AGENTS.md / instructions.md
+        // take effect immediately without restarting dsc. Synchronous IO
+        // on small files in the local cwd is well under a millisecond —
+        // negligible against a streaming API call.
+        instructions: loadInstructions(toolCtx.cwd),
       }),
     },
     ...repairToolCallPairing(conversationMessages()),

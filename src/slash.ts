@@ -14,6 +14,7 @@ export const SLASH_COMMANDS: ReadonlyArray<string> = [
   "export",
   "help",
   "import",
+  "instructions",
   "lang",
   "list",
   "model",

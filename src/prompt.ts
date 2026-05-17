@@ -36,6 +36,13 @@ export interface PromptContext {
   summary?: string;
   /** Free-form language directive — model is told to reply only in this. */
   language?: string;
+  /** Optional per-user/per-project instruction overlays, in least-to-most
+   *  specific order. Each gets its own labeled section in the prompt. */
+  instructions?: Array<{
+    path: string;
+    kind: "user" | "agents" | "dsc";
+    content: string;
+  }>;
 }
 
 /**
@@ -53,6 +60,25 @@ export function buildSystemPrompt(ctx: PromptContext): string {
   const lines: string[] = [SYSTEM_PROMPT, "", "Current context:"];
   lines.push(`- cwd: ${ctx.cwd}`);
   lines.push(`- date: ${ctx.date.toISOString().slice(0, 10)}`);
+
+  if (ctx.instructions && ctx.instructions.length) {
+    // Each overlay is labeled with its source so the model can weigh them
+    // appropriately (e.g. a user-global "use 2-space indents" still gives
+    // way to a project AGENTS.md that says 4). Position is after cwd/date
+    // and before summary/language so the prefix cache covers the stable
+    // headers; the overlays themselves only change when the user edits
+    // those files, which is rare within a session.
+    for (const ins of ctx.instructions) {
+      const label =
+        ins.kind === "user"
+          ? "User instructions"
+          : ins.kind === "agents"
+            ? "Project instructions (AGENTS.md)"
+            : "Project instructions (.dsc/instructions.md)";
+      lines.push("", `${label} from ${ins.path}:`, ins.content);
+    }
+  }
+
   if (ctx.summary) {
     lines.push("");
     lines.push("Previously in this session (summary of compacted turns):");

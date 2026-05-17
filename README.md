@@ -399,6 +399,32 @@ you've previously said `a` (always) for that tool this session. The
 prompt; the model is encouraged (via the system prompt) to reach for
 them on non-trivial multi-step asks so the user sees real-time progress.
 
+## Per-project instructions
+
+Drop a Markdown file at the project root (or any ancestor of your cwd)
+and dsc will append it to the system prompt every turn — same idea as
+`CLAUDE.md` in Claude Code, project-tested with the convergent
+`AGENTS.md` convention. Use it to teach the agent project conventions
+without re-typing them in every conversation.
+
+dsc looks in three places, in this order:
+
+| Path | Purpose |
+|---|---|
+| `~/.config/dsc/instructions.md` | User-global — personal preferences across all projects (default response language, "prefer ripgrep over grep", etc). |
+| `AGENTS.md` | Project-level, walked up from cwd. Shared with other agents that read the convergent `AGENTS.md` convention. |
+| `.dsc/instructions.md` | Project-level, dsc-only. Useful when a rule should apply when working through dsc but not when other agents look at the repo. |
+
+Each present file is included as its own labeled section in the prompt,
+so the model knows the source. The dsc-specific file appears last and
+effectively overrides earlier ones on conflict. Files re-read every turn
+— edit them and the next request picks up the change.
+
+`/instructions` lists which files are currently active and shows their
+content. Empty files are treated as absent. Files larger than 64 KB are
+skipped silently — keep instruction files reasonably short, both for the
+cache prefix and because the model parses them every turn.
+
 ## Sessions and history
 
 Each session is a JSON file under `$XDG_DATA_HOME/dsc/sessions/`
