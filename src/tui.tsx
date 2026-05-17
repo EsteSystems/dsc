@@ -41,7 +41,14 @@ import * as path from "node:path";
 import { compactSession } from "./compact.js";
 import { formatVersionInfo } from "./version.js";
 import { openEditor } from "./editor.js";
-import { checkForUpdate, runUpdate } from "./update.js";
+import {
+  addLocalBinToShellRc,
+  checkForUpdate,
+  localBinOnPath,
+  runUpdate,
+  setUserNpmPrefix,
+  shellRcPath,
+} from "./update.js";
 import { copyToClipboard } from "./clipboard.js";
 
 const AUTO_COMPACT_AT_TOKENS = Number(process.env.DSC_AUTO_COMPACT ?? "0") || 0;
@@ -799,21 +806,84 @@ async function main() {
           info(
             `installing ${check.latest} (currently ${check.current}) via npm…`,
           );
-          const r = await runUpdate();
+          let r = await runUpdate();
+          // Auto-recover from EACCES on Linux/macOS: offer to set
+          // npm's prefix under ~/.local so the install doesn't need
+          // sudo, optionally append the PATH export to the user's
+          // shell rc, then retry. The user approves each step.
+          const isPermError = /EACCES|EPERM|permission/.test(r.output);
+          if (
+            !r.ok &&
+            isPermError &&
+            process.platform !== "win32"
+          ) {
+            const ans = await approval.confirm({
+              title: "Permission error installing dsc",
+              body:
+                `npm install -g hit a permission error (likely because npm's prefix is system-owned).` +
+                `\n\nDurable fix: set npm's global prefix to ~/.local. After this, all` +
+                `\n\`npm install -g\` and \`/update\` runs work without sudo.` +
+                `\n\nDsc will:` +
+                `\n  1. mkdir -p ~/.local/{bin,lib}` +
+                `\n  2. npm config set prefix ~/.local` +
+                `\n  3. retry the install`,
+              question: "Configure user prefix and retry? [y]es / [n]o (Esc rejects) ",
+            });
+            if (ans !== "no") {
+              try {
+                const dir = await setUserNpmPrefix();
+                info(`set npm prefix to ${dir}; retrying install…`);
+                r = await runUpdate();
+                if (r.ok && !localBinOnPath()) {
+                  const rc = shellRcPath();
+                  if (rc) {
+                    const pathAns = await approval.confirm({
+                      title: "Add ~/.local/bin to PATH",
+                      body:
+                        `dsc now lives at ~/.local/bin/dsc but that directory isn't on your PATH.` +
+                        `\n\nDsc can append the export line to:` +
+                        `\n  ${rc}` +
+                        `\n\nYou'll need to open a new terminal (or \`source\` the file) for it to take effect.`,
+                      question: `Append PATH export to ${rc}? [y]es / [n]o (Esc rejects) `,
+                    });
+                    if (pathAns !== "no") {
+                      try {
+                        const edited = await addLocalBinToShellRc();
+                        if (edited) {
+                          info(
+                            `appended PATH export to ${edited}. Open a new terminal or run:` +
+                              `\n  source ${edited}`,
+                          );
+                        } else {
+                          info(`(${rc} already has ~/.local/bin in PATH; no edit needed)`);
+                        }
+                      } catch (e) {
+                        info(`error appending to ${rc}: ${(e as Error).message}`);
+                      }
+                    } else {
+                      info(
+                        `Add this line to your shell rc manually:\n  export PATH="$HOME/.local/bin:$PATH"`,
+                      );
+                    }
+                  } else {
+                    info(
+                      `Couldn't autodetect your shell rc. Add this line manually:` +
+                        `\n  export PATH="$HOME/.local/bin:$PATH"`,
+                    );
+                  }
+                }
+              } catch (e) {
+                info(`error: prefix setup failed: ${(e as Error).message}`);
+              }
+            }
+          }
           if (!r.ok) {
-            // npm prints reasonably descriptive errors itself; pass them
-            // through. For the common EACCES case on Linux/macOS where
-            // npm's prefix points at /usr/local, suggest a user-owned
-            // prefix as the durable fix — sudo'ing the install once
-            // only postpones the same error next time.
-            const isPermError = /EACCES|EPERM|permission/.test(r.output);
+            // Either non-permission failure, or the user declined the
+            // auto-recovery, or the retry itself failed. Surface npm's
+            // own output verbatim — it usually points at the cause.
             const tail =
               isPermError && process.platform !== "win32"
-                ? `\n\nThis looks like a permission error. The durable fix is to put npm's global dir under your home:` +
-                  `\n  npm config set prefix ~/.local` +
-                  `\n  export PATH=~/.local/bin:$PATH    # add to ~/.bashrc / ~/.zshrc` +
-                  `\n  /update                            # try again` +
-                  `\n\nQuick one-off:  sudo npm install -g @este.systems/dsc@latest`
+                ? `\n\nQuick one-off if you'd rather: sudo npm install -g @este.systems/dsc@latest`
                 : "";
             info(`error: update failed\n${r.output.slice(-1500)}${tail}`);
             return true;

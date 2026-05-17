@@ -1,5 +1,5 @@
 import { promises as fsp } from "node:fs";
-import { spawn } from "node:child_process";
+import { spawn, spawnSync } from "node:child_process";
 import { homedir } from "node:os";
 import * as path from "node:path";
 import { VERSION } from "./version.js";
@@ -177,4 +177,95 @@ export function runUpdate(signal?: AbortSignal): Promise<UpdateResult> {
       settle(false);
     });
   });
+}
+
+/**
+ * Switch npm's global prefix to a user-owned directory so subsequent
+ * `npm install -g` (and `/update`) don't need sudo. Default target is
+ * ~/.local (XDG-friendly; ~/.local/bin is on most users' PATH already).
+ *
+ * Steps:
+ *   1. mkdir -p <prefix>/bin and <prefix>/lib so npm doesn't EACCES on
+ *      its first attempt to create them.
+ *   2. `npm config set prefix <prefix>`.
+ *
+ * Returns the resolved prefix on success. Throws (rejects) when either
+ * the mkdir or the npm config call fails.
+ */
+export async function setUserNpmPrefix(prefix?: string): Promise<string> {
+  const target = prefix ?? path.join(homedir(), ".local");
+  await fsp.mkdir(path.join(target, "bin"), { recursive: true });
+  await fsp.mkdir(path.join(target, "lib"), { recursive: true });
+  const r = spawnSync("npm", ["config", "set", "prefix", target], {
+    shell: true,
+    stdio: ["ignore", "pipe", "pipe"],
+    windowsHide: true,
+  });
+  if (r.status !== 0) {
+    const err = (r.stderr?.toString() || r.stdout?.toString() || "").trim();
+    throw new Error(`npm config set prefix failed: ${err || `exit ${r.status}`}`);
+  }
+  return target;
+}
+
+/**
+ * Resolve the user's shell rc path for the PATH export. Returns null when
+ * we can't confidently pick one — better to print the manual line than
+ * to write to the wrong file.
+ *
+ *   bash → ~/.bashrc (Linux) or ~/.bash_profile (macOS, the login shell)
+ *   zsh  → ~/.zshrc
+ *   fish → ~/.config/fish/config.fish
+ */
+export function shellRcPath(): string | null {
+  const shell = process.env.SHELL ?? "";
+  const home = homedir();
+  if (shell.endsWith("/bash")) {
+    return process.platform === "darwin"
+      ? path.join(home, ".bash_profile")
+      : path.join(home, ".bashrc");
+  }
+  if (shell.endsWith("/zsh")) return path.join(home, ".zshrc");
+  if (shell.endsWith("/fish")) return path.join(home, ".config", "fish", "config.fish");
+  return null;
+}
+
+/**
+ * Append a PATH export line to the user's shell rc if it isn't already
+ * present. Idempotent — if any line in the file mentions `.local/bin`
+ * the file is left alone. Returns the path edited, or null when nothing
+ * was changed.
+ *
+ * Bash/zsh use `export PATH=…`; fish uses `fish_add_path` (idiomatic),
+ * which fish gathers from config and prepends to $PATH.
+ */
+export async function addLocalBinToShellRc(): Promise<string | null> {
+  const rc = shellRcPath();
+  if (!rc) return null;
+  let existing = "";
+  try {
+    existing = await fsp.readFile(rc, "utf8");
+  } catch {
+    // missing — we'll create it
+  }
+  if (/\.local\/bin/.test(existing)) return null;
+  const isFish = rc.endsWith("config.fish");
+  const line = isFish
+    ? `fish_add_path $HOME/.local/bin`
+    : `export PATH="$HOME/.local/bin:$PATH"`;
+  const prefix = existing.endsWith("\n") || existing === "" ? "" : "\n";
+  const block =
+    `${prefix}\n# Added by dsc /update — make user-installed npm tools discoverable\n${line}\n`;
+  await fsp.mkdir(path.dirname(rc), { recursive: true });
+  await fsp.appendFile(rc, block, "utf8");
+  return rc;
+}
+
+/** True when `$HOME/.local/bin` is already on PATH. */
+export function localBinOnPath(): boolean {
+  const sep = process.platform === "win32" ? ";" : ":";
+  const target = path.join(homedir(), ".local", "bin");
+  return (process.env.PATH ?? "")
+    .split(sep)
+    .some((p) => path.normalize(p) === path.normalize(target));
 }

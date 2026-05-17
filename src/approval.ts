@@ -139,3 +139,25 @@ export async function confirmBash(command: string, description: string): Promise
 export async function confirmFetch(url: string): Promise<ApprovalAnswer> {
   return ask({ tool: "web_fetch", title: "Fetch URL", body: url, kind: "url", question: PROMPT });
 }
+
+/**
+ * Generic yes/no confirm for slash commands that need to take an action
+ * with a clear cost (touch the user's npm config, edit a shell rc, etc.)
+ * but aren't tied to a specific tool name. `tool: "confirm"` is a sentinel
+ * that won't ever match ctx.sessionApprovals, so "always" collapses to
+ * "yes" — callers can treat the result as a simple boolean.
+ */
+export async function confirm(opts: {
+  title: string;
+  body?: string;
+  question?: string;
+  kind?: ApprovalPayload["kind"];
+}): Promise<ApprovalAnswer> {
+  return ask({
+    tool: "confirm",
+    title: opts.title,
+    body: opts.body,
+    kind: opts.kind ?? "command",
+    question: opts.question ?? "Proceed? [y]es / [n]o (Esc rejects) ",
+  });
+}
