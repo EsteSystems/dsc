@@ -2,6 +2,7 @@
 // TAB-completion read from this — keep the two in sync by editing here.
 // Names are without the leading "/".
 export const SLASH_COMMANDS: ReadonlyArray<string> = [
+  "api-key",
   "audit",
   "auto-continue",
   "clear",

@@ -13,10 +13,12 @@ import {
   AVAILABLE_MODELS,
   DEFAULT_MODEL,
   DeepSeekError,
+  apiKeySource,
   computeCostUsd,
   configPath,
   hasApiKey,
   recordUsage,
+  saveApiKey,
   type Message,
   type Model,
 } from "./api.js";
@@ -98,14 +100,11 @@ async function main() {
     process.exit(0);
   }
 
-  if (!hasApiKey()) {
-    process.stderr.write(
-      `No DeepSeek API key found.\n` +
-        `Either export DEEPSEEK_API_KEY, or create ${configPath()} containing:\n` +
-        `  {"api_key": "sk-..."}\n`,
-    );
-    process.exit(1);
-  }
+  // First-launch UX: don't hard-exit when there's no API key. Boot the
+  // TUI and surface a one-line system message telling the user how to
+  // set one via /api-key. Submitting a turn before setting the key will
+  // surface DeepSeekError, which we already render as a system error.
+  const startupKeyMissing = !hasApiKey();
 
   const cwd = process.cwd();
   await history.migrateLegacyIfPresent(cwd, DEFAULT_MODEL);
@@ -509,6 +508,7 @@ async function main() {
             "/queue [clear]          list or clear queued prompts",
             "/export [path]          write current session JSON for transfer",
             "/import <path>          load session JSON; rebinds cwd here (--keep-cwd to skip)",
+            "/api-key [key]          show source / save api key to config file",
             "/exit                   exit",
           ].join("\n"),
         );
@@ -705,6 +705,32 @@ async function main() {
       case "version":
         info(formatVersionInfo());
         return true;
+      case "api-key": {
+        const text = arg.trim();
+        if (!text) {
+          // No arg: show where the key is configured (don't print the key
+          // itself; that's not the kind of thing /command output should
+          // splash to scrollback).
+          const src = apiKeySource();
+          if (src === "env") {
+            info("api key: set via $DEEPSEEK_API_KEY (env)");
+          } else if (src === "file") {
+            info(`api key: stored in ${configPath()}`);
+          } else {
+            info(
+              `api key: not set\nrun /api-key <key> to save one, or export DEEPSEEK_API_KEY`,
+            );
+          }
+          return true;
+        }
+        try {
+          const written = await saveApiKey(text);
+          info(`api key saved to ${written}`);
+        } catch (e) {
+          info(`error: ${(e as Error).message}`);
+        }
+        return true;
+      }
       case "audit": {
         const sub = arg.trim();
         if (!sub || sub === "path") {
@@ -859,6 +885,16 @@ async function main() {
       void replHistory.append(text);
     }
     if (text.startsWith("/")) {
+      // Echo the command into history so the user can see which command
+      // produced the system-line output that follows. Without this the
+      // info() lines look orphaned — especially when you scroll back
+      // and there's no record of what triggered each one.
+      setState((s) => ({
+        history: [
+          ...s.history,
+          { id: `u-${s.history.length}`, role: "user", content: text },
+        ],
+      }));
       void handleSlash(text);
       return;
     }
@@ -909,6 +945,16 @@ async function main() {
   }
 
   mountApp();
+
+  // Surface the missing-key state once the UI is up so it lands in the
+  // pinned history instead of as stderr noise that scrolls past. Mentions
+  // both /api-key and the env-var alternative so power users aren't forced
+  // through the slash command.
+  if (startupKeyMissing) {
+    info(
+      `No DeepSeek API key found. Run "/api-key <key>" to save one to ${configPath()}, or export DEEPSEEK_API_KEY in your shell.`,
+    );
+  }
 }
 
 function truncate(s: string, n: number): string {

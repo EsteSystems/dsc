@@ -76,6 +76,7 @@ export class DeepSeekError extends Error {
 }
 
 import { readFileSync } from "node:fs";
+import { promises as fsp } from "node:fs";
 import { homedir } from "node:os";
 import * as nodePath from "node:path";
 
@@ -164,6 +165,67 @@ export function hasApiKey(): boolean {
   } catch {
     return false;
   }
+}
+
+/**
+ * Returns "env" when the env var DEEPSEEK_API_KEY is set, "file" when the
+ * config file has a key, or null when neither is set. Lets the UI explain
+ * to the user where the key is coming from without leaking it.
+ */
+export function apiKeySource(): "env" | "file" | null {
+  if (process.env.DEEPSEEK_API_KEY) return "env";
+  try {
+    return readKeyFromFile() !== null ? "file" : null;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Merge `key` into the config file at `configPath()`, creating the file +
+ * parent directory if needed. Preserves any other fields already in the
+ * file (e.g. `search` provider settings). Writes with 0600 permissions so
+ * other users on the box can't read the key.
+ *
+ * Invalidates the in-memory caches so the next getApiKey() picks up the
+ * new value without a restart.
+ */
+export async function saveApiKey(key: string): Promise<string> {
+  const trimmed = key.trim();
+  if (!trimmed) throw new DeepSeekError("api key is empty");
+  const p = configPath();
+  await fsp.mkdir(nodePath.dirname(p), { recursive: true });
+
+  let existing: Record<string, unknown> = {};
+  try {
+    let txt = await fsp.readFile(p, "utf8");
+    if (txt.charCodeAt(0) === 0xfeff) txt = txt.slice(1);
+    const parsed = JSON.parse(txt);
+    if (parsed && typeof parsed === "object") {
+      existing = parsed as Record<string, unknown>;
+    }
+  } catch {
+    // missing or unparseable — start fresh; we'd rather overwrite a broken
+    // file than silently fail the save
+  }
+  existing.api_key = trimmed;
+
+  // mode on the write is honored on POSIX; Windows ignores it but inherits
+  // the directory ACL. Best-effort chmod afterwards in case the file
+  // already existed with looser perms.
+  await fsp.writeFile(p, JSON.stringify(existing, null, 2), {
+    encoding: "utf8",
+    mode: 0o600,
+  });
+  try {
+    await fsp.chmod(p, 0o600);
+  } catch {
+    // POSIX-only; ignore failures on Windows.
+  }
+
+  _cachedKey = undefined;
+  _cachedConfig = undefined;
+  return p;
 }
 
 export async function chat(opts: CallOptions): Promise<ChatResponse> {
