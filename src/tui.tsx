@@ -40,6 +40,7 @@ import { compactSession } from "./compact.js";
 import { formatVersionInfo } from "./version.js";
 import { openEditor } from "./editor.js";
 import { checkForUpdate, runUpdate } from "./update.js";
+import { copyToClipboard } from "./clipboard.js";
 
 const AUTO_COMPACT_AT_TOKENS = Number(process.env.DSC_AUTO_COMPACT ?? "0") || 0;
 const AUTO_COMPACT_KEEP = Number(process.env.DSC_AUTO_COMPACT_KEEP ?? "4") || 4;
@@ -505,6 +506,7 @@ async function main() {
             "/lang [name|off]        force the model to reply in a language",
             "/auto-continue [N|off]  auto-grant N extra MAX_TOOL_DEPTH budgets",
             "/cost                   show token usage and cost",
+            "/copy                   copy last assistant response to clipboard",
             "/version                show version info",
             "/compact [keep]         summarize old turns (default keep=4)",
             "/transcript             dump full message log",
@@ -627,6 +629,31 @@ async function main() {
       case "cost":
         info(formatCost(stats, model));
         return true;
+      case "copy": {
+        // Copy the most recent assistant response to the OS clipboard. The
+        // last *assistant* (not tool, not system, not user) is what the
+        // user usually wants — the actual answer text.
+        const state = getState();
+        let target: UIMessage | undefined;
+        for (let i = state.history.length - 1; i >= 0; i--) {
+          const m = state.history[i];
+          if (m.role === "assistant" && m.content) {
+            target = m;
+            break;
+          }
+        }
+        if (!target) {
+          info("no assistant message to copy");
+          return true;
+        }
+        try {
+          await copyToClipboard(target.content);
+          info(`copied ${target.content.length} chars to clipboard`);
+        } catch (e) {
+          info(`error: ${(e as Error).message}`);
+        }
+        return true;
+      }
       case "model":
         if (!arg) {
           info(`current model: ${model}`);

@@ -7,6 +7,7 @@ export const SLASH_COMMANDS: ReadonlyArray<string> = [
   "auto-continue",
   "clear",
   "compact",
+  "copy",
   "cost",
   "edit",
   "exit",
