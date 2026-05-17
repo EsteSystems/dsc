@@ -252,6 +252,7 @@ async function main(): Promise<void> {
     yolo: cli.yolo,
     filesTouched: stats.files_touched,
     sessionId: session.id,
+    sessionApprovals: new Set(),
   };
 
   // Single-in-flight, coalescing save. Multiple persist() calls during one
@@ -403,10 +404,15 @@ async function main(): Promise<void> {
   // are the user's y/N answer, not new prompts. The queue listener checks this
   // flag and stays out of the way so the answer doesn't get queued.
   let approvalActive = false;
-  approval.setAsker(async (q) => {
+  approval.setAsker(async (req) => {
     approvalActive = true;
     try {
-      return await rl.question(q);
+      // We own the readline interface for this REPL session — print the
+      // preview (title + colored body) here ourselves rather than letting
+      // approval.ask() do it, so all stdout writes coordinate with rl's
+      // history and the y/N prompt sits right under the diff.
+      process.stdout.write(approval.renderApprovalForStdout(req) + "\n");
+      return await rl.question(req.question);
     } finally {
       approvalActive = false;
     }
@@ -492,6 +498,7 @@ async function main(): Promise<void> {
         stats = session.stats;
         toolCtx.filesTouched = stats.files_touched;
         toolCtx.sessionId = session.id;
+        toolCtx.sessionApprovals = new Set();
         refreshStatus();
         process.stdout.write(`${DIM}new session started (${session.id})${RESET}\n`);
       } else if (cmd === "list") {

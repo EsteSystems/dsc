@@ -10,8 +10,54 @@ const YELLOW = "\x1b[33m";
 const CYAN = "\x1b[36m";
 const BOLD = "\x1b[1m";
 
-function colorize(diffText: string): string {
-  return diffText
+/**
+ * Payload handed to the active asker. Front-ends decide how to render:
+ * the REPL prints title + body to stdout and reads y/N via readline;
+ * the TUI mounts an ApprovalDialog whose box renders title + body inline,
+ * so no preview bleeds above the dynamic ink frame.
+ *
+ * `kind` lets the dialog colorize structurally — diffs get red/green per
+ * line, commands stay plain, etc. The body is plain text (no ANSI codes)
+ * since ink's <Text> doesn't pass through escape sequences.
+ */
+export interface ApprovalPayload {
+  title: string;
+  body?: string;
+  question: string;
+  kind?: "diff" | "preview" | "command" | "url";
+  /** Tool name (e.g. "bash", "edit_file"). When the user answers "always",
+   *  the caller flips a per-tool session-approval flag so subsequent calls
+   *  of this tool skip the dialog until /clear or the process restarts. */
+  tool: string;
+}
+
+export type ApprovalAnswer = "yes" | "no" | "always";
+
+type Asker = (req: ApprovalPayload) => Promise<string>;
+let activeAsker: Asker | null = null;
+
+export function setAsker(fn: Asker | null): void {
+  activeAsker = fn;
+}
+
+/**
+ * Render a payload to ANSI-colored text suitable for stdout. Exported so
+ * the REPL asker (which owns the existing readline interface and can't
+ * delegate to ask() without re-creating it) can print previews itself.
+ */
+export function renderApprovalForStdout(req: ApprovalPayload): string {
+  const parts: string[] = [`\n${YELLOW}${req.title}${RESET}`];
+  if (req.body) parts.push(colorizeForRepl(req.body, req.kind));
+  return parts.join("\n");
+}
+
+/**
+ * Apply per-line ANSI coloring for the REPL stdout path. Mirrors the
+ * structural rules the TUI dialog uses, just with escape sequences.
+ */
+function colorizeForRepl(body: string, kind: ApprovalPayload["kind"]): string {
+  if (kind !== "diff") return body;
+  return body
     .split("\n")
     .map((line) => {
       if (line.startsWith("+++") || line.startsWith("---")) return BOLD + line + RESET;
@@ -23,67 +69,73 @@ function colorize(diffText: string): string {
     .join("\n");
 }
 
-type Asker = (question: string) => Promise<string>;
-let activeAsker: Asker | null = null;
-
-export function setAsker(fn: Asker | null): void {
-  activeAsker = fn;
-}
-
-async function ask(question: string): Promise<boolean> {
+async function ask(req: ApprovalPayload): Promise<ApprovalAnswer> {
   let answer: string;
   if (activeAsker) {
-    answer = (await activeAsker(question)).trim().toLowerCase();
+    // TUI path: front-end owns rendering of title + body + question. No
+    // stdout writes — those would land above ink's dynamic frame as noise.
+    answer = (await activeAsker(req)).trim().toLowerCase();
   } else {
+    // REPL path: render the preview to stdout ourselves before asking.
+    process.stdout.write(`\n${YELLOW}${req.title}${RESET}\n`);
+    if (req.body) process.stdout.write(colorizeForRepl(req.body, req.kind) + "\n");
     const rl = readline.createInterface({ input, output });
     try {
-      answer = (await rl.question(question)).trim().toLowerCase();
+      answer = (await rl.question(req.question)).trim().toLowerCase();
     } finally {
       rl.close();
     }
   }
-  return answer === "y" || answer === "yes";
+  if (answer === "a" || answer === "always") return "always";
+  if (answer === "y" || answer === "yes") return "yes";
+  return "no";
 }
+
+const PROMPT = "Approve? [y]es / [n]o / [a]lways (Esc rejects) ";
 
 export async function confirmWrite(
   path: string,
   oldContent: string,
   newContent: string,
   existed: boolean,
-): Promise<boolean> {
+): Promise<ApprovalAnswer> {
   const verb = existed ? "Overwrite" : "Create";
-  process.stdout.write(`\n${YELLOW}${verb} ${path}${RESET}\n`);
+  let body: string;
+  let kind: ApprovalPayload["kind"];
   if (existed) {
-    const patch = createPatch(path, oldContent, newContent, "", "", { context: 3 });
-    process.stdout.write(colorize(patch) + "\n");
+    body = createPatch(path, oldContent, newContent, "", "", { context: 3 });
+    kind = "diff";
   } else {
-    const preview = newContent.length > 4000 ? newContent.slice(0, 4000) + "\n…(truncated)" : newContent;
-    process.stdout.write(`${DIM}--- proposed content (${newContent.length} chars) ---${RESET}\n`);
-    process.stdout.write(preview + "\n");
+    const preview =
+      newContent.length > 4000 ? newContent.slice(0, 4000) + "\n…(truncated)" : newContent;
+    body = `--- proposed content (${newContent.length} chars) ---\n${preview}`;
+    kind = "preview";
   }
-  return ask(`Apply? [y/N] `);
+  return ask({ tool: "write_file", title: `${verb} ${path}`, body, kind, question: PROMPT });
 }
 
 export async function confirmEdit(
   path: string,
   oldContent: string,
   newContent: string,
-): Promise<boolean> {
-  process.stdout.write(`\n${YELLOW}Edit ${path}${RESET}\n`);
-  const patch = createPatch(path, oldContent, newContent, "", "", { context: 3 });
-  process.stdout.write(colorize(patch) + "\n");
-  return ask(`Apply? [y/N] `);
+): Promise<ApprovalAnswer> {
+  const body = createPatch(path, oldContent, newContent, "", "", { context: 3 });
+  return ask({ tool: "edit_file", title: `Edit ${path}`, body, kind: "diff", question: PROMPT });
 }
 
-export async function confirmBash(command: string, description: string): Promise<boolean> {
-  process.stdout.write(`\n${YELLOW}Run shell command${RESET}\n`);
-  if (description) process.stdout.write(`${DIM}${description}${RESET}\n`);
-  process.stdout.write(`  $ ${command}\n`);
-  return ask(`Run? [y/N] `);
+export async function confirmBash(command: string, description: string): Promise<ApprovalAnswer> {
+  const bodyLines: string[] = [];
+  if (description) bodyLines.push(description);
+  bodyLines.push(`$ ${command}`);
+  return ask({
+    tool: "bash",
+    title: "Run shell command",
+    body: bodyLines.join("\n"),
+    kind: "command",
+    question: PROMPT,
+  });
 }
 
-export async function confirmFetch(url: string): Promise<boolean> {
-  process.stdout.write(`\n${YELLOW}Fetch URL${RESET}\n`);
-  process.stdout.write(`  ${url}\n`);
-  return ask(`Fetch? [y/N] `);
+export async function confirmFetch(url: string): Promise<ApprovalAnswer> {
+  return ask({ tool: "web_fetch", title: "Fetch URL", body: url, kind: "url", question: PROMPT });
 }

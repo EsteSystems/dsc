@@ -2,7 +2,13 @@ import { promises as fs } from "node:fs";
 import { spawn, spawnSync } from "node:child_process";
 import * as path from "node:path";
 import type { ToolSchema } from "./api.js";
-import { confirmBash, confirmEdit, confirmFetch, confirmWrite } from "./approval.js";
+import {
+  confirmBash,
+  confirmEdit,
+  confirmFetch,
+  confirmWrite,
+  type ApprovalAnswer,
+} from "./approval.js";
 import * as audit from "./audit.js";
 import { search as runSearchProvider, formatResults, getProvider, SearchError } from "./search.js";
 import { getState, setState, type AgentTask } from "./store.js";
@@ -233,12 +239,39 @@ export interface ToolContext {
   yolo: boolean;
   filesTouched: Set<string>;
   sessionId: string;
+  /** Tools the user said "always" to in this session. Subsequent calls of
+   *  these tools skip the approval dialog. Cleared by /clear and on a
+   *  fresh process. Initialized empty if absent for backward compat. */
+  sessionApprovals?: Set<string>;
 }
 
 export interface ToolResult {
   content: string;
   rejected?: boolean;
   audit?: Record<string, unknown>;
+}
+
+/**
+ * Bridge between a tool executor and the approval dialog. Returns true if
+ * the tool may proceed (the user said yes/always, or this tool is already
+ * always-approved for the session, or --yolo is on). On "always", records
+ * the tool name in ctx.sessionApprovals so subsequent calls skip the
+ * dialog until /clear or process restart.
+ */
+async function gateApproval(
+  ctx: ToolContext,
+  toolName: string,
+  prompt: () => Promise<ApprovalAnswer>,
+): Promise<boolean> {
+  if (ctx.yolo) return true;
+  if (ctx.sessionApprovals?.has(toolName)) return true;
+  const ans = await prompt();
+  if (ans === "no") return false;
+  if (ans === "always") {
+    if (!ctx.sessionApprovals) ctx.sessionApprovals = new Set();
+    ctx.sessionApprovals.add(toolName);
+  }
+  return true;
 }
 
 function resolvePath(ctx: ToolContext, p: string): string {
@@ -417,15 +450,15 @@ async function writeFile(args: Record<string, unknown>, ctx: ToolContext): Promi
       // fall through; treat as new
     }
   }
-  if (!ctx.yolo) {
-    const ok = await confirmWrite(abs, oldContent, content, existed);
-    if (!ok) {
-      return {
-        content: "rejected by user",
-        rejected: true,
-        audit: { path: abs, size: content.length, existed },
-      };
-    }
+  const approved = await gateApproval(ctx, "write_file", () =>
+    confirmWrite(abs, oldContent, content, existed),
+  );
+  if (!approved) {
+    return {
+      content: "rejected by user",
+      rejected: true,
+      audit: { path: abs, size: content.length, existed },
+    };
   }
   await fs.mkdir(path.dirname(abs), { recursive: true });
   await fs.writeFile(abs, content, "utf8");
@@ -473,15 +506,15 @@ async function editFile(args: Record<string, unknown>, ctx: ToolContext): Promis
     ? current.split(oldString).join(newString)
     : current.replace(oldString, newString);
 
-  if (!ctx.yolo) {
-    const ok = await confirmEdit(abs, current, updated);
-    if (!ok) {
-      return {
-        content: "rejected by user",
-        rejected: true,
-        audit: { path: abs, replacements: occurrences },
-      };
-    }
+  const approvedEdit = await gateApproval(ctx, "edit_file", () =>
+    confirmEdit(abs, current, updated),
+  );
+  if (!approvedEdit) {
+    return {
+      content: "rejected by user",
+      rejected: true,
+      audit: { path: abs, replacements: occurrences },
+    };
   }
   await fs.writeFile(abs, updated, "utf8");
   ctx.filesTouched.add(abs);
@@ -499,15 +532,15 @@ async function runBash(
   const command = String(args.command ?? "");
   if (!command) return { content: "error: missing 'command'", audit: { error: "missing_command" } };
   const timeoutMs = Number(args.timeout_ms) > 0 ? Math.floor(Number(args.timeout_ms)) : 60_000;
-  if (!ctx.yolo) {
-    const ok = await confirmBash(command, String(args.description ?? ""));
-    if (!ok) {
-      return {
-        content: "rejected by user",
-        rejected: true,
-        audit: { command, timeout_ms: timeoutMs },
-      };
-    }
+  const approvedBash = await gateApproval(ctx, "bash", () =>
+    confirmBash(command, String(args.description ?? "")),
+  );
+  if (!approvedBash) {
+    return {
+      content: "rejected by user",
+      rejected: true,
+      audit: { command, timeout_ms: timeoutMs },
+    };
   }
   return new Promise<ToolResult>((resolve) => {
     // `shell: true` makes Node pick the platform's default: /bin/sh -c on
@@ -745,9 +778,9 @@ async function runWebFetch(
   if (!/^https?:\/\//i.test(url)) {
     return { content: "error: url must start with http:// or https://", audit: { url, error: "bad_scheme" } };
   }
-  if (!ctx.yolo) {
-    const ok = await confirmFetch(url);
-    if (!ok) return { content: "rejected by user", rejected: true, audit: { url } };
+  const approvedFetch = await gateApproval(ctx, "web_fetch", () => confirmFetch(url));
+  if (!approvedFetch) {
+    return { content: "rejected by user", rejected: true, audit: { url } };
   }
   let res: Response;
   try {

@@ -133,6 +133,7 @@ async function main() {
     yolo: !!cli.yolo,
     filesTouched: stats.files_touched,
     sessionId: session.id,
+    sessionApprovals: new Set(),
   };
 
   // Coalescing save (same shape as REPL).
@@ -208,17 +209,18 @@ async function main() {
   const timerId = setInterval(syncStatus, 1000);
 
   // Install the approval asker — routes confirm* calls through the
-  // ApprovalDialog component. The diff/preview body printed by confirm*
-  // still goes to stdout and will appear above ink's dynamic frame; that's
-  // acceptable for a first cut and gets cleaned up in a later commit.
+  // ApprovalDialog component. The structured payload (title + body + kind)
+  // goes into the dialog so the diff/preview renders inline in the yellow
+  // bordered box rather than bleeding above ink's dynamic frame.
   approval.setAsker(
-    (q) =>
+    (req) =>
       new Promise<string>((resolve) => {
         setState({
           approval: {
-            title: "Confirm",
-            body: "",
-            question: q,
+            title: req.title,
+            body: req.body ?? "",
+            kind: req.kind,
+            question: req.question,
             resolve,
           },
         });
@@ -522,6 +524,10 @@ async function main() {
         stats = session.stats;
         toolCtx.filesTouched = stats.files_touched;
         toolCtx.sessionId = session.id;
+        // Per-tool always-approval is conversation-scoped, so /clear has
+        // to drop it — otherwise the user would carry over implicit trust
+        // they made to a session they just walked away from.
+        toolCtx.sessionApprovals = new Set();
         setState({ history: [], current: null });
         info(`new session started (${session.id})`);
         syncStatus();

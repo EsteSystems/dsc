@@ -17,6 +17,8 @@ export interface UIMessage {
 export interface ApprovalRequest {
   title: string;
   body: string;
+  /** Hint for how to colorize the body — diffs get red/green lines etc. */
+  kind?: "diff" | "preview" | "command" | "url";
   question: string;
   resolve: (answer: string) => void;
 }
