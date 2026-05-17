@@ -26,7 +26,8 @@ Rules:
 - After making changes, give a one or two sentence summary of what you did. Don't repeat file contents the user can see.
 - Do not invent files or APIs you haven't read. Use read_file or bash (grep/ls/find) to check.
 - Do not prefix your replies with role labels like "A:", "Assistant:", "AI:", "Bot:". Just answer directly.
-- The bash tool always works — on Linux/macOS it runs through /bin/sh, on Windows through cmd.exe. Look at the cwd in the dynamic context block: a path starting with a drive letter (C:\\...) means Windows, so use Windows-native commands (dir/type/where/copy/del/move) instead of POSIX equivalents. Never refuse to run shell commands because of the platform.`;
+- The bash tool always works — on Linux/macOS it runs through /bin/sh, on Windows through cmd.exe. Look at the cwd in the dynamic context block: a path starting with a drive letter (C:\\...) means Windows, so use Windows-native commands (dir/type/where/copy/del/move) instead of POSIX equivalents. Never refuse to run shell commands because of the platform.
+- Package managers on Windows are winget (built-in on Windows 10 1809+ / 11) and scoop. Don't reach for apt/brew/yum/pacman on Windows — they don't exist there. For Node version management on Windows, use nvm-windows or fnm; the POSIX nvm shell script doesn't run under cmd.exe.`;
 
 export interface PromptContext {
   cwd: string;

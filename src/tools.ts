@@ -85,7 +85,7 @@ export const TOOL_SCHEMAS: ToolSchema[] = [
     function: {
       name: "bash",
       description:
-        "Run a shell command. Always works regardless of OS — uses /bin/sh -c on Linux/macOS and cmd.exe /d /s /c on Windows. Pick syntax that matches the host: e.g. `ls` on Linux/macOS vs `dir` on Windows; `cat` vs `type`; `which` vs `where`; `rm` vs `del`; `mv` vs `move`. Check the cwd in the system prompt to know which platform you're on (paths starting with a drive letter like C:\\ mean Windows). Output is captured and truncated if very long. Long-running interactive commands are not supported.",
+        "Run a shell command. Always works regardless of OS — uses /bin/sh -c on Linux/macOS and cmd.exe /d /s /c on Windows. Pick syntax that matches the host: e.g. `ls` on Linux/macOS vs `dir` on Windows; `cat` vs `type`; `which` vs `where`; `rm` vs `del`; `mv` vs `move`. Package managers on Windows are `winget install <pkg>` (built-in on Windows 10 1809+ / 11) and `scoop install <pkg>` — apt/brew/yum/pacman don't exist there. For Node version management on Windows, use nvm-windows or fnm. Check the cwd in the system prompt to know which platform you're on (paths starting with a drive letter like C:\\ mean Windows). Output is captured and truncated if very long. Long-running interactive commands are not supported.",
       parameters: {
         type: "object",
         properties: {

@@ -10,6 +10,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Added
 - `/search-key [provider] [key]` — list/save search-provider API keys (Brave, Tavily) and print signup URLs so the user knows where to get one. Mirrors `/api-key`'s shape.
 - `/api-key` and the welcome panel now point at https://platform.deepseek.com/api_keys when no DeepSeek key is configured.
+- System prompt + bash tool description teach the model about Windows package managers (winget / scoop) and Node version managers (nvm-windows / fnm). Stops the model from suggesting `apt install` on Windows.
 
 ### Removed
 - The readline REPL is gone. The TUI has been the default entry for five releases; the `--repl` opt-out and its supporting code (`src/index.ts`, the DECSTBM `StatusBar` in `src/ui.ts`, the streaming markdown→ANSI renderer in `src/markdown.ts`) are deleted. One-shot mode (`dsc "prompt"`) is unchanged — the TUI's stdout adapter still handles it.
