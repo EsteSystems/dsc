@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.5.1] - 2026-05-18
+
 ### Changed
 - `/search-key` is replaced by `/search` with subcommands. `/search` prints the active provider + per-provider key status + signup URLs. `/search use <brave|tavily|ddg>` writes `search.provider` to the config. `/search key <provider> [key]` shows or saves a key. The old half-feature (you could save a key but not switch provider without editing the JSON) is gone.
 
@@ -165,7 +167,8 @@ Initial public release.
 - DECSTBM-pinned status bar.
 - Cross-platform packaging (`npm pack` + per-OS installer scripts).
 
-[Unreleased]: https://github.com/EsteSystems/dsc/compare/v0.5.0...HEAD
+[Unreleased]: https://github.com/EsteSystems/dsc/compare/v0.5.1...HEAD
+[0.5.1]: https://github.com/EsteSystems/dsc/compare/v0.5.0...v0.5.1
 [0.5.0]: https://github.com/EsteSystems/dsc/compare/v0.4.1...v0.5.0
 [0.4.1]: https://github.com/EsteSystems/dsc/compare/v0.4.0...v0.4.1
 [0.4.0]: https://github.com/EsteSystems/dsc/compare/v0.3.0...v0.4.0
