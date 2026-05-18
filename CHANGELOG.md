@@ -7,6 +7,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+- Streaming markdown render. The currently-streaming assistant turn now splits at the last blank line outside a code fence: paragraphs before that point render through the full Markdown component (bold, italic, code, lists, tables, etc), the still-streaming tail stays plain so half-typed markers don't flip interpretation on every chunk. Once a paragraph "commits" by being followed by a blank line it shifts into the stable prefix. Markdown is memoized on its `source` prop so re-renders that only change the tail don't re-parse the stable portion. Finalized turns in `<Static>` render the same as before — fully rich.
+
 ## [0.5.1] - 2026-05-18
 
 ### Changed

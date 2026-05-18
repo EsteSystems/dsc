@@ -9,14 +9,19 @@ import { Box, Text } from "ink";
 //
 // We intentionally don't pull in `marked` or similar — those produce HTML
 // or ANSI strings, neither of which ink's Text component renders. A small
-// purpose-built parser is also faster to invoke than a full lexer, which
-// matters since this runs once per assistant turn (after streaming finalizes).
+// purpose-built parser also lets us memoize per-source so streaming
+// re-renders skip the parse when source hasn't changed.
 
 interface Props {
   source: string;
 }
 
-export function Markdown({ source }: Props) {
+// React.memo on `source`: when the parent re-renders (e.g. every chunk
+// of a streaming turn) but the source we're handed hasn't changed, skip
+// the parse + ink tree rebuild entirely. The streaming pipeline relies
+// on this — the "stable" prefix passed in is unchanged for many chunks
+// in a row, only updated when a paragraph finishes.
+export const Markdown = React.memo(function Markdown({ source }: Props) {
   const blocks = parseBlocks(source);
   return (
     <>
@@ -25,7 +30,7 @@ export function Markdown({ source }: Props) {
       ))}
     </>
   );
-}
+});
 
 type ParsedBlock =
   | { kind: "heading"; level: number; text: string }
