@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.5.3] - 2026-05-19
+
 ### Fixed
 - Streaming markdown actually streams now. 0.5.2 only rendered rich once a paragraph "committed" via a trailing blank line — too conservative for typical model output, which rarely emits a blank until the end. Now the entire streaming content goes through `Markdown` on every chunk; `React.memo` skips the parse when `source` is unchanged (spinner ticks etc). Partial markers (open `**`, half-typed ```) render literal and snap to formatted once they pair.
 
@@ -175,7 +177,8 @@ Initial public release.
 - DECSTBM-pinned status bar.
 - Cross-platform packaging (`npm pack` + per-OS installer scripts).
 
-[Unreleased]: https://github.com/EsteSystems/dsc/compare/v0.5.2...HEAD
+[Unreleased]: https://github.com/EsteSystems/dsc/compare/v0.5.3...HEAD
+[0.5.3]: https://github.com/EsteSystems/dsc/compare/v0.5.2...v0.5.3
 [0.5.2]: https://github.com/EsteSystems/dsc/compare/v0.5.1...v0.5.2
 [0.5.1]: https://github.com/EsteSystems/dsc/compare/v0.5.0...v0.5.1
 [0.5.0]: https://github.com/EsteSystems/dsc/compare/v0.4.1...v0.5.0
