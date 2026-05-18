@@ -7,6 +7,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+- Streaming markdown actually streams now. 0.5.2 only rendered rich once a paragraph "committed" via a trailing blank line — too conservative for typical model output, which rarely emits a blank until the end. Now the entire streaming content goes through `Markdown` on every chunk; `React.memo` skips the parse when `source` is unchanged (spinner ticks etc). Partial markers (open `**`, half-typed ```) render literal and snap to formatted once they pair.
+
 ## [0.5.2] - 2026-05-18
 
 ### Changed

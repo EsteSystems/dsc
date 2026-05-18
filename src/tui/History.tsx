@@ -18,43 +18,11 @@ export function History() {
 
 interface MessageRowProps {
   message: UIMessage;
-  /** Currently-streaming message — render finalized paragraphs through
-   *  Markdown, leave the in-progress tail (the paragraph still being
-   *  typed) as plain text so mid-construct markers (half-typed **, an
-   *  open ```) don't cause flicker as the parser flips interpretation
-   *  on each chunk. */
+  /** Kept for callers that want to opt out of rich rendering during
+   *  streaming (none currently). The default — render Markdown through
+   *  the live turn — relies on Markdown's React.memo to skip re-parse
+   *  when source is unchanged between ticks. */
   streaming?: boolean;
-}
-
-/**
- * Split `content` at the last blank line that isn't inside a code fence.
- * Lines before that point are "stable" (no more characters will arrive in
- * those paragraphs); lines after it are the tail still being streamed.
- *
- * Splitting on blank lines is safe because every markdown block-level
- * construct (paragraph, heading, list block, blockquote, table) is
- * terminated by one — so anything before the last blank is a complete
- * block the parser can render without surprises. Mid-line edits within
- * the tail are kept as plain text until they're "committed" by a blank
- * line, at which point they shift into the stable prefix on the next
- * chunk.
- */
-function splitStableTail(content: string): { stable: string; tail: string } {
-  const lines = content.split("\n");
-  let inFence = false;
-  let lastBlank = -1;
-  for (let i = 0; i < lines.length; i++) {
-    if (/^```/.test(lines[i])) {
-      inFence = !inFence;
-      continue;
-    }
-    if (!inFence && lines[i].trim() === "") lastBlank = i;
-  }
-  if (lastBlank < 0) return { stable: "", tail: content };
-  return {
-    stable: lines.slice(0, lastBlank + 1).join("\n"),
-    tail: lines.slice(lastBlank + 1).join("\n"),
-  };
 }
 
 export function MessageRow({ message: m, streaming = false }: MessageRowProps) {
@@ -120,23 +88,18 @@ export function MessageRow({ message: m, streaming = false }: MessageRowProps) {
         </Box>
       ) : null}
       {isAssistant && m.content ? (
-        streaming ? (
-          // Streaming: render stable paragraphs through Markdown (memoized
-          // — the parse only re-runs when `stable` changes), keep the
-          // still-streaming tail as plain Text so partial markers don't
-          // flicker.
-          (() => {
-            const { stable, tail } = splitStableTail(m.content);
-            return (
-              <>
-                {stable ? <Markdown source={stable} /> : null}
-                {tail ? <Text>{tail}</Text> : null}
-              </>
-            );
-          })()
-        ) : (
-          <Markdown source={m.content} />
-        )
+        // Always render through Markdown — even during streaming. The
+        // previous "wait for a blank line before any rich render" rule
+        // was too conservative: most assistant turns don't emit a blank
+        // line until very late, so users saw plain text the whole time
+        // and rich rendering only on finalize. With React.memo on the
+        // Markdown component, the parse + ink reconcile only happen
+        // when `source` changes (i.e. when a chunk arrives), not on
+        // every parent re-render (spinner tick, status sync). Partial
+        // markdown markers (open **, half-typed ```) render as literal
+        // text and snap to formatted once they pair — brief flicker on
+        // those characters in exchange for rich rendering throughout.
+        <Markdown source={m.content} />
       ) : m.content ? (
         <Text>{m.content}</Text>
       ) : null}
