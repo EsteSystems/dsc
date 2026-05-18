@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.5.2] - 2026-05-18
+
 ### Changed
 - Streaming markdown render. The currently-streaming assistant turn now splits at the last blank line outside a code fence: paragraphs before that point render through the full Markdown component (bold, italic, code, lists, tables, etc), the still-streaming tail stays plain so half-typed markers don't flip interpretation on every chunk. Once a paragraph "commits" by being followed by a blank line it shifts into the stable prefix. Markdown is memoized on its `source` prop so re-renders that only change the tail don't re-parse the stable portion. Finalized turns in `<Static>` render the same as before — fully rich.
 
@@ -170,7 +172,8 @@ Initial public release.
 - DECSTBM-pinned status bar.
 - Cross-platform packaging (`npm pack` + per-OS installer scripts).
 
-[Unreleased]: https://github.com/EsteSystems/dsc/compare/v0.5.1...HEAD
+[Unreleased]: https://github.com/EsteSystems/dsc/compare/v0.5.2...HEAD
+[0.5.2]: https://github.com/EsteSystems/dsc/compare/v0.5.1...v0.5.2
 [0.5.1]: https://github.com/EsteSystems/dsc/compare/v0.5.0...v0.5.1
 [0.5.0]: https://github.com/EsteSystems/dsc/compare/v0.4.1...v0.5.0
 [0.4.1]: https://github.com/EsteSystems/dsc/compare/v0.4.0...v0.4.1
