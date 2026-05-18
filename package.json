@@ -36,6 +36,7 @@
     "dev": "tsx src/tui.tsx",
     "build": "tsc -p .",
     "typecheck": "tsc -p . --noEmit",
+    "test": "node --import tsx --test",
     "start": "node dist/tui.js",
     "package": "node scripts/package.mjs",
     "prepack": "node scripts/build.mjs"

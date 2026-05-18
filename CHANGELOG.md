@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- Test scaffold using `node --test` invoked through `tsx` — no new dependency. `npm test` discovers and runs `tests/*.test.ts`. Seed coverage on `completeSlash`, `compareSemver`, `loadInstructions` (with temp-dir + isolated XDG_CONFIG_HOME), and `history` save/load/list/export/import (with isolated XDG_DATA_HOME). 27 tests, 5 suites at landing.
+- GitHub Actions CI: typecheck + tests on Linux / macOS / Windows for every push and PR.
+
 ## [0.5.3] - 2026-05-19
 
 ### Fixed

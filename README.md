@@ -601,11 +601,17 @@ Notes:
 ## Development
 
 ```sh
-npm run dev                  # tsx src/index.ts
+npm run dev                  # tsx src/tui.tsx
 npm run typecheck            # tsc --noEmit
+npm test                     # node --test, runs tests/*.test.ts via tsx
 npm run build                # compiles to dist/
 npm run package              # build + npm pack into pkg/
 ```
+
+Tests live under `tests/`, separate from `src/` so they don't ship in
+the npm tarball. The runner is Node's built-in `node --test` invoked
+through `tsx` (no extra test-framework dependency). CI runs the same
+command on Linux, macOS, and Windows for every push and PR.
 
 Source layout:
 
