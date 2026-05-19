@@ -626,8 +626,9 @@ access. To release:
 #    bottom. Commit the changelog edit before npm version so the bump
 #    commit and the changelog entry land in the same release.
 
-# 2. Bump the version (semver). For a pre-1.0 patch:
-npm version patch                       # → 0.1.1, also creates a git tag
+# 2. Bump the version (semver):
+npm version patch                       # → 1.0.1 (creates a commit + git tag)
+                                        # use `minor` or `major` for the others
 
 # 3. Make sure you're logged in to npm:
 npm whoami                              # should print your username

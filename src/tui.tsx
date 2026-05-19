@@ -636,6 +636,7 @@ async function main() {
             "/api-key [key]          show source / save api key to config file",
             "/search [use|key] …     show / switch search provider / save brave|tavily key",
             "/update                 check npm for a newer dsc and install it",
+            "/edit [text]            open $EDITOR; the saved buffer becomes the next prompt",
             "/exit                   exit",
           ].join("\n"),
         );

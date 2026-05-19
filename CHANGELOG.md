@@ -7,11 +7,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.0.0] - 2026-05-19
+
+First stable release. The TUI, the agent loop, the tool surface, the
+session model, the approval flow, the MCP integration, the install/
+update story — all of it has been used in real work for weeks and the
+rough edges are sanded. Future minor versions remain backwards-
+compatible in the slash command surface, the config file shape, and
+the on-disk session format.
+
 ### Added
 - MCP stdio transport. `mcp.servers.<name>` now supports `transport: "stdio"` with `command` / `args` / `env`, spawning a local subprocess MCP server (filesystem, git, custom in-house, anything `npx`-distributable). Child env merges on top of `process.env` so the subprocess still sees PATH etc; `${VAR}` references expand in command, args, and env values. Transport is inferred from which of `url`/`command` is set when not explicit.
 - MCP approval gating. Every server has a `requireApproval` policy: `"always"` (every call asks), `"never"` (pass through), `"auto"` (heuristic — tool names / descriptions matching destructive verbs like write/delete/send/run/etc get prompted, clearly read-only ones pass). Defaults: `"always"` for stdio, `"auto"` for HTTP. The `a` (always) answer adds the namespaced tool name to a per-session allowlist so repeated identical calls skip the dialog. Args are pretty-printed in the approval body so the user sees what's about to happen before saying yes.
 - Expanded test coverage. 5 new suites: `prompt.test.ts` (system-prompt assembly + cache-prefix hygiene), `markdown.test.ts` (block-parser invariants), `mcp.test.ts` (approval heuristic + env-var expansion), `store.test.ts` (pub/sub contract), `api.test.ts` (configPath, key sources, cost math). 42 new tests; total 69 across 13 suites. `parseBlocks` (Markdown), `autoRequiresApproval` and `expandEnv` (mcp) are now exported for direct testing.
 - `/budget [usd|off]` sets a per-session USD ceiling. One-time `info()` warning at 80% of the limit; the next turn after the limit is reached refuses to send with a clear error pointing at `/budget off` and `/budget <amount>`. Catches runaway `/auto-continue` loops where you walk away from dsc and come back to a $4 conversation. Session-scoped (not persisted across restarts); resetting the limit clears the warned flag so the new threshold gets its own notice.
+- `/edit` added to the in-app `/help` listing (already worked; was undocumented).
 
 ### Fixed
 - MCP "auto" approval heuristic now catches `write_file` / `delete_record` / etc. The previous `\bwrite\b`-style regex didn't fire on snake_case names because JS treats `_` as a word character. Replaced with tokenizing on non-letters and checking against a set of destructive verbs (including common `-s` / irregular `-ed` forms so verb-shaped descriptions like "sends a message" also trip). Test added.
@@ -194,7 +204,8 @@ Initial public release.
 - DECSTBM-pinned status bar.
 - Cross-platform packaging (`npm pack` + per-OS installer scripts).
 
-[Unreleased]: https://github.com/EsteSystems/dsc/compare/v0.6.0...HEAD
+[Unreleased]: https://github.com/EsteSystems/dsc/compare/v1.0.0...HEAD
+[1.0.0]: https://github.com/EsteSystems/dsc/compare/v0.6.0...v1.0.0
 [0.6.0]: https://github.com/EsteSystems/dsc/compare/v0.5.3...v0.6.0
 [0.5.3]: https://github.com/EsteSystems/dsc/compare/v0.5.2...v0.5.3
 [0.5.2]: https://github.com/EsteSystems/dsc/compare/v0.5.1...v0.5.2
