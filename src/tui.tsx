@@ -27,6 +27,12 @@ import {
 import { getProvider, getProviderKey } from "./search.js";
 import { loadInstructions } from "./instructions.js";
 import {
+  callMCPTool,
+  closeAll as closeMCP,
+  connectAll as connectMCP,
+  type MCPConnection,
+} from "./mcp.js";
+import {
   runAgent,
   formatCost,
   estimateContextTokens,
@@ -188,6 +194,16 @@ async function main() {
     sessionId: session.id,
     sessionApprovals: new Set(),
   };
+
+  // MCP connections live here so /mcp, runTurn, and the close-on-exit
+  // hook can all reach them. Populated by connectMCP() once at boot,
+  // mutated by /mcp reconnect (future). When no `mcp.servers` block is
+  // in the config this is just an empty array — no network, no cost.
+  let mcpConnections: MCPConnection[] = [];
+  const mcpExtraTools = (): import("./api.js").ToolSchema[] =>
+    mcpConnections.flatMap((c) => c.tools);
+  const mcpDispatch = (name: string, args: Record<string, unknown>) =>
+    callMCPTool(mcpConnections, name, args);
 
   // Coalescing save (same shape as REPL).
   let savePromise: Promise<void> | null = null;
@@ -405,6 +421,8 @@ async function main() {
         maxAutoContinue: getState().autoContinue,
         language: session.language,
         events,
+        extraTools: mcpExtraTools(),
+        dispatchExtraTool: mcpDispatch,
       });
     } catch (e) {
       const text =
@@ -561,6 +579,7 @@ async function main() {
             "/copy                   copy last assistant response to clipboard",
             "/version                show version info",
             "/instructions           list active per-project / per-user instruction overlays",
+            "/mcp                    list connected MCP servers and their tools",
             "/compact [keep]         summarize old turns (default keep=4)",
             "/transcript             dump full message log",
             "/audit [path|show N]    audit log info",
@@ -795,6 +814,45 @@ async function main() {
       case "version":
         info(formatVersionInfo());
         return true;
+      case "mcp": {
+        // Status / inspection only for now — connections are established
+        // at boot. Future: subcommands for reconnect, disable, etc.
+        if (mcpConnections.length === 0) {
+          info(
+            [
+              "No MCP servers connected.",
+              "",
+              "To wire one in, add an `mcp.servers` block to your config:",
+              `  ${configPath()}`,
+              "",
+              "Example (Tavily remote MCP):",
+              '  "mcp": {',
+              '    "servers": {',
+              '      "tavily": {',
+              '        "url": "https://mcp.tavily.com/mcp/",',
+              '        "headers": { "Authorization": "Bearer ${TAVILY_API_KEY}" }',
+              "      }",
+              "    }",
+              "  }",
+              "",
+              "Restart dsc after editing — connections are made at boot.",
+            ].join("\n"),
+          );
+          return true;
+        }
+        const lines: string[] = [];
+        for (const c of mcpConnections) {
+          lines.push(`── ${c.name} ──`);
+          for (const t of c.tools) {
+            // t.function.name is namespaced (mcp_<server>_<tool>); strip
+            // the prefix for readability.
+            const short = t.function.name.replace(/^mcp_[^_]+_/, "");
+            lines.push(`  ${short}: ${t.function.description ?? ""}`);
+          }
+        }
+        info(lines.join("\n"));
+        return true;
+      }
       case "instructions": {
         // Show every overlay the agent currently sees, in the order they
         // appear in the system prompt. Resolved fresh per call so edits
@@ -1262,6 +1320,8 @@ async function main() {
         assistantLabel: session.assistantLabel,
         maxAutoContinue: getState().autoContinue,
         language: session.language,
+        extraTools: mcpExtraTools(),
+        dispatchExtraTool: mcpDispatch,
         // No events: agent writes its assistant header, content, tool
         // arrows, and notices directly to stdout — same as REPL one-shot.
       });
@@ -1345,6 +1405,29 @@ async function main() {
       .join(", ");
     info(`loaded instruction overlays: ${labels}  (/instructions to inspect)`);
   }
+
+  // Connect any configured MCP servers in the background. We don't block
+  // boot — the user can interact with built-in tools immediately, and
+  // MCP-provided tools become available the moment connectAll resolves.
+  // If a turn starts before MCP is ready, that turn just doesn't see
+  // those tools; subsequent turns do.
+  void (async () => {
+    try {
+      const { connections, errors } = await connectMCP();
+      mcpConnections = connections;
+      if (connections.length > 0) {
+        const summary = connections
+          .map((c) => `${c.name} (${c.tools.length} tools)`)
+          .join(", ");
+        info(`mcp connected: ${summary}  (/mcp to inspect)`);
+      }
+      for (const e of errors) {
+        info(`error: mcp server '${e.name}' failed: ${e.error}`);
+      }
+    } catch (e) {
+      info(`error: mcp connect failed: ${(e as Error).message}`);
+    }
+  })();
 
   // Fire-and-forget update probe. Uses the 24h cache by default so a
   // chatty notice doesn't appear on every launch — only once per day,

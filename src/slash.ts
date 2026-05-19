@@ -17,6 +17,7 @@ export const SLASH_COMMANDS: ReadonlyArray<string> = [
   "instructions",
   "lang",
   "list",
+  "mcp",
   "model",
   "queue",
   "quit",

@@ -152,6 +152,15 @@ export interface RunOptions {
   language?: string;
   /** When provided, agent emits structured events instead of writing to stdout. */
   events?: AgentEvents;
+  /** Additional tool schemas to advertise to the model. Used by MCP — each
+   *  entry's name starts with `mcp_<server>_` so the dispatcher can route. */
+  extraTools?: import("./api.js").ToolSchema[];
+  /** Optional dispatcher for tools whose name starts with `mcp_`. Called
+   *  in lieu of the built-in `executeTool` switch. */
+  dispatchExtraTool?: (
+    name: string,
+    args: Record<string, unknown>,
+  ) => Promise<{ content: string; rejected?: boolean }>;
 }
 
 export async function runAgent(opts: RunOptions): Promise<void> {
@@ -205,7 +214,13 @@ export async function runAgent(opts: RunOptions): Promise<void> {
       resp = await chatStream({
         model,
         messages: buildApi(),
-        tools: TOOL_SCHEMAS,
+        // Built-in tools first, MCP-provided tools appended. Order
+        // doesn't affect dispatch (we route on the mcp_ prefix), but
+        // keeping built-ins first is a stable, predictable shape in
+        // the prompt for the model.
+        tools: opts.extraTools?.length
+          ? TOOL_SCHEMAS.concat(opts.extraTools)
+          : TOOL_SCHEMAS,
         signal,
         onContent: handlers.onContent,
         onReasoning: handlers.onReasoning,
@@ -255,7 +270,21 @@ export async function runAgent(opts: RunOptions): Promise<void> {
       let result: { content: string; rejected?: boolean };
       let throwAfter: unknown = null;
       try {
-        result = await executeTool(name, argsRaw, toolCtx, signal);
+        // MCP-provided tools have names like `mcp_<server>_<tool>`.
+        // Route them to the caller-supplied dispatcher; everything else
+        // goes through the built-in executor in tools.ts.
+        if (opts.dispatchExtraTool && name.startsWith("mcp_")) {
+          let parsedArgs: Record<string, unknown> = {};
+          try {
+            parsedArgs = JSON.parse(argsRaw || "{}");
+          } catch {
+            // fall through with empty args — dispatcher returns a useful
+            // error string in its own ToolResult
+          }
+          result = await opts.dispatchExtraTool(name, parsedArgs);
+        } else {
+          result = await executeTool(name, argsRaw, toolCtx, signal);
+        }
       } catch (e) {
         // Convert the throw into a synthetic tool result so the assistant's
         // tool_call gets a corresponding tool message — without that, the

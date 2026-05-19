@@ -425,6 +425,42 @@ content. Empty files are treated as absent. Files larger than 64 KB are
 skipped silently — keep instruction files reasonably short, both for the
 cache prefix and because the model parses them every turn.
 
+## MCP servers
+
+dsc can connect to remote [MCP](https://modelcontextprotocol.io) servers
+at boot and expose their tools to the agent alongside the built-ins.
+Configure under `mcp.servers` in `~/.config/deepseek/deepseek.json`:
+
+```jsonc
+{
+  "api_key": "sk-...",
+  "mcp": {
+    "servers": {
+      "tavily": {
+        "url": "https://mcp.tavily.com/mcp/",
+        "headers": { "Authorization": "Bearer ${TAVILY_API_KEY}" }
+      }
+    }
+  }
+}
+```
+
+Per-server fields:
+
+| Field | Notes |
+|---|---|
+| `url` | Required. Remote MCP endpoint. |
+| `headers` | Optional. Static map merged into every request. `${VAR}` references expand against `process.env` at connect time; missing vars throw. |
+| `query` | Optional. Appended as URL query params (e.g. `?tavilyApiKey=…`). Same `${VAR}` expansion. |
+| `enabled` | Optional, default `true`. Set to `false` to skip without removing the entry. |
+| `timeoutMs` | Optional connect timeout. Default 8 s. |
+
+Each server's tools are advertised to the model as `mcp_<server>_<tool>`,
+so two servers exposing the same tool name don't collide. `/mcp` shows
+the connected servers + their tools. Connection is HTTP (Streamable
+HTTP) only for now — stdio (local subprocess) transport is a future
+addition.
+
 ## Sessions and history
 
 Each session is a JSON file under `$XDG_DATA_HOME/dsc/sessions/`
