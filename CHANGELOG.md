@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.6.0] - 2026-05-19
+
 ### Added
 - Generic MCP (Model Context Protocol) client. Configure remote MCP servers under `mcp.servers` in `~/.config/deepseek/deepseek.json`; dsc connects at boot, discovers tools via `listTools`, and exposes them to the agent alongside the built-ins. Tool names get namespaced as `mcp_<server>_<tool>` so multiple servers don't collide. Headers/query support `${VAR}` env expansion so API keys don't have to live in the config file. `/mcp` lists connected servers and their tools. HTTP (Streamable HTTP) transport only in this release; stdio is a future addition. New runtime dependency on `@modelcontextprotocol/sdk`.
 - Test scaffold using `node --test` invoked through `tsx` — no new dependency. `npm test` discovers and runs `tests/*.test.ts`. Seed coverage on `completeSlash`, `compareSemver`, `loadInstructions` (with temp-dir + isolated XDG_CONFIG_HOME), and `history` save/load/list/export/import (with isolated XDG_DATA_HOME). 27 tests, 5 suites at landing.
@@ -182,7 +184,8 @@ Initial public release.
 - DECSTBM-pinned status bar.
 - Cross-platform packaging (`npm pack` + per-OS installer scripts).
 
-[Unreleased]: https://github.com/EsteSystems/dsc/compare/v0.5.3...HEAD
+[Unreleased]: https://github.com/EsteSystems/dsc/compare/v0.6.0...HEAD
+[0.6.0]: https://github.com/EsteSystems/dsc/compare/v0.5.3...v0.6.0
 [0.5.3]: https://github.com/EsteSystems/dsc/compare/v0.5.2...v0.5.3
 [0.5.2]: https://github.com/EsteSystems/dsc/compare/v0.5.1...v0.5.2
 [0.5.1]: https://github.com/EsteSystems/dsc/compare/v0.5.0...v0.5.1
