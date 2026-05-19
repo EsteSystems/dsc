@@ -21,26 +21,81 @@
 
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
+import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js";
+import { confirm } from "./approval.js";
 import { getConfig } from "./api.js";
 import type { ToolSchema } from "./api.js";
+
+type AnyTransport = StreamableHTTPClientTransport | StdioClientTransport;
+
+/**
+ * Verbs in a tool name or description that suggest the call mutates
+ * state somewhere. The "auto" approval policy gates anything matching
+ * and lets clearly-read-only tools (search/list/get/read/...) pass.
+ *
+ * Kept deliberately broad — false positives just ask the user, which
+ * is the safer failure mode. A missed destructive verb (false negative)
+ * is the costly one.
+ */
+const DESTRUCTIVE_VERBS_RE =
+  /\b(?:write|create|delete|remove|update|set|send|post|publish|run|exec|execute|kill|move|rename|insert|drop|push|put|patch|edit|modify|append|truncate|destroy|spawn|invoke)\b/i;
+
+function autoRequiresApproval(
+  toolName: string,
+  description: string | undefined,
+): boolean {
+  if (DESTRUCTIVE_VERBS_RE.test(toolName)) return true;
+  if (description && DESTRUCTIVE_VERBS_RE.test(description)) return true;
+  return false;
+}
 
 const NAME_PATTERN = /^[a-zA-Z0-9_-]+$/;
 
 export interface MCPServerConfig {
-  /** Transport. Only "http" supported in phase 1. */
-  transport?: "http";
-  /** Server URL. Required. */
-  url: string;
+  /** Transport. Defaults: "http" when `url` is set, "stdio" when
+   *  `command` is set. Set explicitly to disambiguate. */
+  transport?: "http" | "stdio";
+
+  // ── HTTP transport ─────────────────────────────────────────────────
+  /** Server URL. Required for http transport. */
+  url?: string;
   /** Optional request headers (e.g. `Authorization`). `${VAR}` is expanded
    *  against process.env at connect time; missing vars throw. */
   headers?: Record<string, string>;
   /** Optional query-string params appended to `url`. Same `${VAR}`
    *  expansion as headers. Use when a server takes its key via URL. */
   query?: Record<string, string>;
+
+  // ── stdio transport ────────────────────────────────────────────────
+  /** Executable for stdio transport (e.g. "npx", "/path/to/server"). */
+  command?: string;
+  /** Args appended to `command`. `${VAR}` expanded. */
+  args?: string[];
+  /** Extra env vars for the child. `${VAR}` expanded. Merged on top of
+   *  the parent process env so the child still sees PATH etc. */
+  env?: Record<string, string>;
+
+  // ── Common ─────────────────────────────────────────────────────────
   /** Skip this server when false. Default true. */
   enabled?: boolean;
   /** Optional connect timeout in ms. Default 8 s. */
   timeoutMs?: number;
+  /** Per-server approval policy for tool calls:
+   *
+   *    "always" — every call gets the yellow approval dialog
+   *    "never"  — calls pass through without prompting (use --yolo
+   *               level trust; for stable read-only servers only)
+   *    "auto"   — heuristic: tools whose name or description suggests
+   *               state mutation (write/create/delete/send/run/...)
+   *               get prompted; clearly read-only tools (search/get/
+   *               read/list) pass through
+   *
+   *  Defaults: "always" for stdio (local subprocesses usually have
+   *  filesystem access — treat as destructive by default), "auto" for
+   *  http (remote servers are scope-limited to whatever API they
+   *  proxy).
+   */
+  requireApproval?: "always" | "never" | "auto";
 }
 
 export interface MCPConnection {
@@ -48,14 +103,19 @@ export interface MCPConnection {
   name: string;
   /** The connected client. Use to invoke tools. */
   client: Client;
-  /** The transport so we can `terminateSession` on shutdown. */
-  transport: StreamableHTTPClientTransport;
+  /** The transport. HTTP gets `terminateSession`; stdio doesn't (closing
+   *  the client kills the child). Code that closes them out should
+   *  optional-chain on terminateSession. */
+  transport: AnyTransport;
   /** Tools advertised by this server, translated to OpenAI shape with
    *  namespaced names (`mcp_<server>_<tool>`). Drop into `chatStream`'s
    *  `tools` array alongside the built-ins. */
   tools: ToolSchema[];
   /** Lookup the original server tool name from a namespaced name. */
   toolMap: Map<string, string>;
+  /** The raw server config we connected with — kept so callMCPTool can
+   *  read requireApproval without a second lookup. */
+  config: MCPServerConfig;
 }
 
 interface MCPRootConfig {
@@ -103,34 +163,60 @@ async function connectOne(
       `mcp server name "${name}" must match ${NAME_PATTERN} (alphanumeric, '_', '-')`,
     );
   }
-  if (!config.url) throw new Error(`mcp server "${name}": url is required`);
-  if (config.transport && config.transport !== "http") {
-    throw new Error(
-      `mcp server "${name}": transport "${config.transport}" not supported yet (HTTP only)`,
+
+  // Disambiguate transport: explicit `transport` field wins; otherwise
+  // infer from which field is set. Explicit `stdio` plus `url` is an
+  // error, etc.
+  const transportKind: "http" | "stdio" =
+    config.transport ?? (config.command ? "stdio" : "http");
+
+  let transport: AnyTransport;
+  if (transportKind === "http") {
+    if (!config.url) {
+      throw new Error(`mcp.${name}: url is required for http transport`);
+    }
+    const url = new URL(expandEnv(config.url, `mcp.${name}.url`));
+    if (config.query) {
+      for (const [k, v] of Object.entries(config.query)) {
+        url.searchParams.set(k, expandEnv(v, `mcp.${name}.query.${k}`));
+      }
+    }
+    // Expand headers up-front; the transport accepts a static headers
+    // map (any provider needing dynamic re-auth should switch to an
+    // AuthProvider, which the SDK supports — out of scope here).
+    const headers: Record<string, string> = {};
+    if (config.headers) {
+      for (const [k, v] of Object.entries(config.headers)) {
+        headers[k] = expandEnv(v, `mcp.${name}.headers.${k}`);
+      }
+    }
+    transport = new StreamableHTTPClientTransport(url, {
+      requestInit: { headers },
+    });
+  } else {
+    // stdio transport — spawn a local subprocess.
+    if (!config.command) {
+      throw new Error(`mcp.${name}: command is required for stdio transport`);
+    }
+    const command = expandEnv(config.command, `mcp.${name}.command`);
+    const args = (config.args ?? []).map((a, i) =>
+      expandEnv(a, `mcp.${name}.args[${i}]`),
     );
-  }
-
-  // Build the URL with optional query expansion.
-  const url = new URL(expandEnv(config.url, `mcp.${name}.url`));
-  if (config.query) {
-    for (const [k, v] of Object.entries(config.query)) {
-      url.searchParams.set(k, expandEnv(v, `mcp.${name}.query.${k}`));
+    // Inherit parent env first so the child sees PATH etc. Explicit
+    // entries override; `${VAR}` expansion lets users forward specific
+    // env vars without restating them. Filter undefined values for
+    // type-safety against process.env's loose shape.
+    const env: Record<string, string> = {};
+    for (const [k, v] of Object.entries(process.env)) {
+      if (typeof v === "string") env[k] = v;
     }
-  }
-
-  // Expand headers up-front; the transport accepts a static headers map
-  // (any provider needing dynamic re-auth should switch to an
-  // AuthProvider, which the SDK supports — out of scope here).
-  const headers: Record<string, string> = {};
-  if (config.headers) {
-    for (const [k, v] of Object.entries(config.headers)) {
-      headers[k] = expandEnv(v, `mcp.${name}.headers.${k}`);
+    if (config.env) {
+      for (const [k, v] of Object.entries(config.env)) {
+        env[k] = expandEnv(v, `mcp.${name}.env.${k}`);
+      }
     }
+    transport = new StdioClientTransport({ command, args, env });
   }
-
-  const transport = new StreamableHTTPClientTransport(url, {
-    requestInit: { headers },
-  });
 
   const client = new Client({ name: "dsc", version: "0.5.3" });
 
@@ -176,7 +262,7 @@ async function connectOne(
     toolMap.set(namespaced, t.name);
   }
 
-  return { name, client, transport, tools, toolMap };
+  return { name, client, transport, tools, toolMap, config };
 }
 
 async function withTimeout<T>(
@@ -225,11 +311,19 @@ export async function connectAll(): Promise<{
 /**
  * Invoke a namespaced tool (`mcp_<server>_<tool>`) by name. Returns a
  * ToolResult compatible with the rest of the agent's tool path.
+ *
+ * Approval gating: each server has a `requireApproval` policy
+ * ("always" | "never" | "auto"). "auto" uses the DESTRUCTIVE_VERBS_RE
+ * heuristic on the tool name + description. When approval is required
+ * we route through approval.confirm() before calling. "always"
+ * answers add the namespaced tool name to `sessionApprovals` so
+ * subsequent identical tool calls in this session skip the dialog.
  */
 export async function callMCPTool(
   connections: MCPConnection[],
   name: string,
   args: Record<string, unknown>,
+  opts?: { sessionApprovals?: Set<string> },
 ): Promise<{ content: string; rejected?: boolean }> {
   // The first underscore-segmented `_<server>_` identifies which
   // connection to dispatch to. We split on the *second* underscore so
@@ -249,6 +343,47 @@ export async function callMCPTool(
   if (!original || original !== toolName) {
     return { content: `error: tool '${toolName}' not available on '${serverName}'` };
   }
+
+  // ── Approval gate ────────────────────────────────────────────────
+  // Default policy: stdio servers always ask (local subprocesses
+  // typically have filesystem access). HTTP servers default to "auto"
+  // since they're scope-limited to whatever API they wrap.
+  const defaultPolicy: "always" | "auto" =
+    (conn.config.transport ?? (conn.config.command ? "stdio" : "http")) === "stdio"
+      ? "always"
+      : "auto";
+  const policy = conn.config.requireApproval ?? defaultPolicy;
+
+  let mustAsk = false;
+  if (policy === "always") {
+    mustAsk = true;
+  } else if (policy === "auto") {
+    const desc = conn.tools.find((t) => t.function.name === name)?.function
+      .description;
+    mustAsk = autoRequiresApproval(toolName, desc);
+  }
+
+  const alreadyApproved = opts?.sessionApprovals?.has(name) ?? false;
+  if (mustAsk && !alreadyApproved) {
+    // Pretty-print the args so the user sees what's about to happen.
+    // Cap so a huge argument blob doesn't drown the dialog.
+    let argsPreview = JSON.stringify(args, null, 2);
+    if (argsPreview.length > 1200) {
+      argsPreview = argsPreview.slice(0, 1200) + "\n…(truncated)";
+    }
+    const ans = await confirm({
+      title: `Run MCP tool ${name}`,
+      body: argsPreview,
+      kind: "command",
+    });
+    if (ans === "no") {
+      return { content: "rejected by user", rejected: true };
+    }
+    if (ans === "always") {
+      opts?.sessionApprovals?.add(name);
+    }
+  }
+
   try {
     const r = await conn.client.callTool({ name: toolName, arguments: args });
     // MCP returns content as an array of typed items (text, image, etc).
@@ -268,11 +403,18 @@ export async function callMCPTool(
   }
 }
 
-/** Terminate sessions and close clients. Best-effort. */
+/** Terminate sessions and close clients. Best-effort.
+ *  HTTP transports get terminateSession (server-side cleanup); stdio
+ *  transports don't have one (closing the client kills the child). */
 export async function closeAll(connections: MCPConnection[]): Promise<void> {
   for (const c of connections) {
     try {
-      await c.transport.terminateSession?.();
+      if (
+        "terminateSession" in c.transport &&
+        typeof c.transport.terminateSession === "function"
+      ) {
+        await c.transport.terminateSession();
+      }
     } catch {
       // best-effort
     }

@@ -8,6 +8,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- MCP stdio transport. `mcp.servers.<name>` now supports `transport: "stdio"` with `command` / `args` / `env`, spawning a local subprocess MCP server (filesystem, git, custom in-house, anything `npx`-distributable). Child env merges on top of `process.env` so the subprocess still sees PATH etc; `${VAR}` references expand in command, args, and env values. Transport is inferred from which of `url`/`command` is set when not explicit.
+- MCP approval gating. Every server has a `requireApproval` policy: `"always"` (every call asks), `"never"` (pass through), `"auto"` (heuristic — tool names / descriptions matching destructive verbs like write/delete/send/run/etc get prompted, clearly read-only ones pass). Defaults: `"always"` for stdio, `"auto"` for HTTP. The `a` (always) answer adds the namespaced tool name to a per-session allowlist so repeated identical calls skip the dialog. Args are pretty-printed in the approval body so the user sees what's about to happen before saying yes.
 - `/budget [usd|off]` sets a per-session USD ceiling. One-time `info()` warning at 80% of the limit; the next turn after the limit is reached refuses to send with a clear error pointing at `/budget off` and `/budget <amount>`. Catches runaway `/auto-continue` loops where you walk away from dsc and come back to a $4 conversation. Session-scoped (not persisted across restarts); resetting the limit clears the warned flag so the new threshold gets its own notice.
 
 ### Fixed

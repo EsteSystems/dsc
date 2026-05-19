@@ -449,17 +449,39 @@ Per-server fields:
 
 | Field | Notes |
 |---|---|
-| `url` | Required. Remote MCP endpoint. |
-| `headers` | Optional. Static map merged into every request. `${VAR}` references expand against `process.env` at connect time; missing vars throw. |
-| `query` | Optional. Appended as URL query params (e.g. `?tavilyApiKey=…`). Same `${VAR}` expansion. |
+| `transport` | `"http"` or `"stdio"`. Inferred from which of `url`/`command` is set; specify when ambiguous. |
+| `url` | Required for HTTP transport. Remote MCP endpoint. |
+| `headers` | HTTP only. Static map merged into every request. `${VAR}` references expand against `process.env` at connect time; missing vars throw. |
+| `query` | HTTP only. Appended as URL query params (e.g. `?tavilyApiKey=…`). Same `${VAR}` expansion. |
+| `command` | Required for stdio transport. Executable for the local subprocess (e.g. `"npx"`). |
+| `args` | stdio only. Argv list. `${VAR}` expanded. |
+| `env` | stdio only. Extra env vars for the child, merged on top of `process.env` so it still sees PATH etc. `${VAR}` expanded. |
+| `requireApproval` | `"always"` / `"never"` / `"auto"`. Defaults: `"always"` for stdio (local subprocesses usually touch the filesystem), `"auto"` for HTTP (heuristic on tool names — write/delete/send/run/etc trigger the dialog; read/list/search/get pass through). The `a` (always) answer adds the namespaced tool name to a session-scoped allowlist so repeats skip the prompt. |
 | `enabled` | Optional, default `true`. Set to `false` to skip without removing the entry. |
 | `timeoutMs` | Optional connect timeout. Default 8 s. |
 
 Each server's tools are advertised to the model as `mcp_<server>_<tool>`,
 so two servers exposing the same tool name don't collide. `/mcp` shows
-the connected servers + their tools. Connection is HTTP (Streamable
-HTTP) only for now — stdio (local subprocess) transport is a future
-addition.
+the connected servers + their tools.
+
+Example with both transports:
+
+```jsonc
+{
+  "mcp": {
+    "servers": {
+      "tavily": {
+        "url": "https://mcp.tavily.com/mcp/",
+        "headers": { "Authorization": "Bearer ${TAVILY_API_KEY}" }
+      },
+      "fs": {
+        "command": "npx",
+        "args": ["-y", "@modelcontextprotocol/server-filesystem", "/path/to/workspace"]
+      }
+    }
+  }
+}
+```
 
 ## Sessions and history
 

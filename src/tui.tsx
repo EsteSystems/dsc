@@ -203,7 +203,9 @@ async function main() {
   const mcpExtraTools = (): import("./api.js").ToolSchema[] =>
     mcpConnections.flatMap((c) => c.tools);
   const mcpDispatch = (name: string, args: Record<string, unknown>) =>
-    callMCPTool(mcpConnections, name, args);
+    callMCPTool(mcpConnections, name, args, {
+      sessionApprovals: toolCtx.sessionApprovals,
+    });
 
   // Coalescing save (same shape as REPL).
   let savePromise: Promise<void> | null = null;
