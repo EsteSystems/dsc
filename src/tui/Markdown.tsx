@@ -32,7 +32,7 @@ export const Markdown = React.memo(function Markdown({ source }: Props) {
   );
 });
 
-type ParsedBlock =
+export type ParsedBlock =
   | { kind: "heading"; level: number; text: string }
   | { kind: "code"; lang: string; lines: string[] }
   | { kind: "list"; items: string[]; ordered: boolean }
@@ -62,7 +62,7 @@ function parseCellEmphasis(raw: string): { bold: boolean; text: string } {
   return { bold: false, text: raw };
 }
 
-function parseBlocks(src: string): ParsedBlock[] {
+export function parseBlocks(src: string): ParsedBlock[] {
   const lines = src.split(/\r?\n/);
   const out: ParsedBlock[] = [];
   let i = 0;

@@ -29,23 +29,62 @@ import type { ToolSchema } from "./api.js";
 type AnyTransport = StreamableHTTPClientTransport | StdioClientTransport;
 
 /**
- * Verbs in a tool name or description that suggest the call mutates
- * state somewhere. The "auto" approval policy gates anything matching
- * and lets clearly-read-only tools (search/list/get/read/...) pass.
+ * Whole words that, appearing in a tool name or description, suggest
+ * the call mutates state somewhere. The "auto" approval policy gates
+ * anything matching and lets clearly-read-only tools (search / list /
+ * get / read / ...) pass.
+ *
+ * We can't use \b word boundaries with a regex because JS treats `_`
+ * as a word character — so \bwrite\b would never match inside
+ * `write_file`, the most common tool-name shape. Instead we tokenize
+ * the input on any non-letter sequence and check each token against
+ * this set.
  *
  * Kept deliberately broad — false positives just ask the user, which
  * is the safer failure mode. A missed destructive verb (false negative)
  * is the costly one.
  */
-const DESTRUCTIVE_VERBS_RE =
-  /\b(?:write|create|delete|remove|update|set|send|post|publish|run|exec|execute|kill|move|rename|insert|drop|push|put|patch|edit|modify|append|truncate|destroy|spawn|invoke)\b/i;
+const DESTRUCTIVE_WORDS = new Set([
+  // Base + common -s / -ed (irregular) forms so verb-shaped descriptions
+  // like "sends a message" or "deletes the row" trip the heuristic. We
+  // skip -ing forms — they're rare in tool names and descriptions, and
+  // including them all would balloon the list without much value.
+  "write", "writes",
+  "create", "creates", "created",
+  "delete", "deletes", "deleted",
+  "remove", "removes", "removed",
+  "update", "updates", "updated",
+  "set", "sets",
+  "send", "sends", "sent",
+  "post", "posts",
+  "publish", "publishes", "published",
+  "run", "runs",
+  "exec", "execute", "executes",
+  "kill", "kills",
+  "move", "moves",
+  "rename", "renames",
+  "insert", "inserts",
+  "drop", "drops",
+  "push", "pushes",
+  "put", "puts",
+  "patch", "patches",
+  "edit", "edits",
+  "modify", "modifies",
+  "append", "appends",
+  "truncate", "truncates",
+  "destroy", "destroys",
+  "spawn", "spawns",
+  "invoke", "invokes",
+]);
 
-function autoRequiresApproval(
+export function autoRequiresApproval(
   toolName: string,
   description: string | undefined,
 ): boolean {
-  if (DESTRUCTIVE_VERBS_RE.test(toolName)) return true;
-  if (description && DESTRUCTIVE_VERBS_RE.test(description)) return true;
+  const haystack = description ? `${toolName} ${description}` : toolName;
+  for (const token of haystack.toLowerCase().split(/[^a-z]+/)) {
+    if (token && DESTRUCTIVE_WORDS.has(token)) return true;
+  }
   return false;
 }
 
@@ -126,7 +165,7 @@ interface MCPRootConfig {
  * Walk `${VAR}` references in a string against process.env. Throws when
  * a referenced var is unset — fail-fast beats a silent auth bypass.
  */
-function expandEnv(input: string, where: string): string {
+export function expandEnv(input: string, where: string): string {
   return input.replace(/\$\{([A-Z0-9_]+)\}/gi, (_match, name) => {
     const v = process.env[name];
     if (typeof v !== "string" || v.length === 0) {
