@@ -20,6 +20,7 @@ export const SLASH_COMMANDS: ReadonlyArray<string> = [
   "list",
   "mcp",
   "model",
+  "preferences",
   "queue",
   "quit",
   "reasoning",

@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- Slash-set toggle preferences (`/yolo`, `/reasoning`, `/auto-continue`, `/budget`) now persist to `~/.config/dsc/preferences.json` (XDG-aware) and apply on the next launch. Boot precedence: command-line flags > saved preferences > defaults. `$DSC_AUTO_CONTINUE` still wins over the saved auto-continue value for scripted invocations.
+- Loud red `warning:` announcement on launch when persisted `yolo` is on or a persisted `budget` is active — keeps a forgotten-from-last-session setting from silently bypassing approvals or aborting a turn.
+- `/preferences` slash command: show the saved preferences and the file path; `/preferences reset` deletes the file (current session keeps its in-memory state).
+- New `tests/preferences.test.ts` (9 tests): round-trip, merge semantics, `null`-clears-key, malformed/corrupt file handling, budget validation. Total 78 tests across 14 suites.
+
 ## [1.0.0] - 2026-05-19
 
 First stable release. The TUI, the agent loop, the tool surface, the

@@ -40,7 +40,11 @@ export function MessageRow({ message: m, streaming = false }: MessageRowProps) {
     // Errors get red; everything else (slash-command output, notices) goes
     // dim so it reads like the REPL's status/info lines rather than a bold
     // header.
-    const isError = /^(error|API error|\(interrupted)/i.test(m.content);
+    // Anything that needs to grab the eye renders red. `warning:` joins
+    // `error` / `API error` / `(interrupted` here so persisted-yolo and
+    // persisted-budget announcements at boot don't get lost in the
+    // dim system-info stream.
+    const isError = /^(error|warning|API error|\(interrupted)/i.test(m.content);
     return (
       <Box marginBottom={1}>
         <Text color={isError ? "red" : undefined} dimColor={!isError}>

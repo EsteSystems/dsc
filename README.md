@@ -399,6 +399,27 @@ you've previously said `a` (always) for that tool this session. The
 prompt; the model is encouraged (via the system prompt) to reach for
 them on non-trivial multi-step asks so the user sees real-time progress.
 
+## Persistent preferences
+
+Slash commands that set a session-level toggle save their value to
+`~/.config/dsc/preferences.json` (XDG-aware) so the next launch starts
+the same way. Persisted settings:
+
+| Slash | Notes |
+|---|---|
+| `/yolo` | Approval-mode toggle. Persists, but the next launch surfaces a red `warning: yolo is on` line so you can't silently forget it's on. `--yolo` on the command line forces it on regardless of saved state. |
+| `/reasoning [on\|off]` | Show / hide `reasoning_content`. |
+| `/auto-continue [N\|off]` | Per-turn MAX_TOOL_DEPTH budget. `$DSC_AUTO_CONTINUE` env var still wins over the saved value. |
+| `/budget [usd\|off]` | Session cost ceiling. Next launch announces it (red `warning:` line) so an unexpected abort can't catch you off guard. |
+
+Per-session settings (`/lang`, `/model`, `/rename`, `/save`) ride along
+with the session JSON under `~/.local/share/dsc/sessions/`, so `/resume`
+restores them. Preferences here are separate — they're "how I always
+want dsc to start", not "what this conversation needs".
+
+Inspect with `/preferences`; wipe with `/preferences reset` (deletes
+the file; current session keeps its in-memory state).
+
 ## Per-project instructions
 
 Drop a Markdown file at the project root (or any ancestor of your cwd)

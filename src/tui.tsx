@@ -27,6 +27,12 @@ import {
 import { getProvider, getProviderKey } from "./search.js";
 import { loadInstructions } from "./instructions.js";
 import {
+  clearPreferences,
+  preferencesPath,
+  readPreferences,
+  savePreferences,
+} from "./preferences.js";
+import {
   callMCPTool,
   closeAll as closeMCP,
   connectAll as connectMCP,
@@ -185,11 +191,20 @@ async function main() {
   // Without --model, the session's model wins so resuming preserves what
   // the user picked last time.
   let model: Model = cli.modelExplicit && cli.model ? cli.model : session.model;
-  const initialAutoContinue = Number(process.env.DSC_AUTO_CONTINUE ?? "0") || 0;
+
+  // Persisted UI preferences (yolo / reasoning / auto-continue / budget).
+  // Precedence: command-line flags > saved preferences > defaults. The
+  // env-var DSC_AUTO_CONTINUE still beats both for backwards compat with
+  // scripted invocations.
+  const savedPrefs = await readPreferences();
+  const envAutoContinue = Number(process.env.DSC_AUTO_CONTINUE ?? "0") || 0;
+  const initialAutoContinue = envAutoContinue || savedPrefs.autoContinue || 0;
 
   const toolCtx: ToolContext = {
     cwd,
-    yolo: !!cli.yolo,
+    // --yolo on the command line forces it on; otherwise honor saved
+    // preference; otherwise off.
+    yolo: cli.yolo === true ? true : savedPrefs.yolo === true,
     filesTouched: stats.files_touched,
     sessionId: session.id,
     sessionApprovals: new Set(),
@@ -236,7 +251,7 @@ async function main() {
   // `/budget` toggles. We pre-turn-check the spend against this and
   // abort the next prompt when over; `budgetWarned` keeps the 80%
   // notice from firing on every status tick.
-  let budgetUsd: number | null = null;
+  let budgetUsd: number | null = savedPrefs.budgetUsd ?? null;
   let budgetWarned = false;
   const promptQueue: string[] = [];
 
@@ -273,6 +288,10 @@ async function main() {
   setState({
     model,
     yolo: toolCtx.yolo,
+    // savedPrefs.reasoning may be undefined; the store defaults to true
+    // anyway. Explicit `reasoning: false` from prefs is the only path
+    // that flips this on boot.
+    reasoning: savedPrefs.reasoning ?? true,
     assistantLabel: session.assistantLabel ?? "assistant:",
     language: session.language,
     autoContinue: initialAutoContinue,
@@ -627,6 +646,7 @@ async function main() {
             "/version                show version info",
             "/instructions           list active per-project / per-user instruction overlays",
             "/mcp                    list connected MCP servers and their tools",
+            "/preferences [reset]    show or clear persisted slash-set settings",
             "/compact [keep]         summarize old turns (default keep=4)",
             "/transcript             dump full message log",
             "/audit [path|show N]    audit log info",
@@ -773,7 +793,8 @@ async function main() {
         if (text === "off" || text === "none" || text === "0") {
           budgetUsd = null;
           budgetWarned = false;
-          info("budget cleared");
+          void savePreferences({ budgetUsd: null });
+          info("budget cleared  (saved)");
           return true;
         }
         const n = parseFloat(text);
@@ -785,8 +806,9 @@ async function main() {
         // Reset the warning flag so the user gets a fresh 80% notice
         // against the new limit even if they're already over it.
         budgetWarned = false;
+        void savePreferences({ budgetUsd: n });
         info(
-          `budget: $${n.toFixed(2)} (warn at 80%, abort the next turn at 100%)`,
+          `budget: $${n.toFixed(2)} (warn at 80%, abort the next turn at 100%)  (saved)`,
         );
         return true;
       }
@@ -830,13 +852,19 @@ async function main() {
       case "yolo":
         toolCtx.yolo = !toolCtx.yolo;
         setState({ yolo: toolCtx.yolo });
-        info(`yolo: ${toolCtx.yolo}`);
+        // Persist so the next launch starts the same way. Saving `false`
+        // explicitly (rather than deleting the key) means a user who
+        // *turned* yolo off doesn't get re-prompted next time if we ever
+        // add a "default-on" path; today both are equivalent.
+        void savePreferences({ yolo: toolCtx.yolo });
+        info(`yolo: ${toolCtx.yolo}  (saved to ${preferencesPath()})`);
         return true;
       case "reasoning": {
         const cur = getState().reasoning;
         const next = arg === "on" ? true : arg === "off" ? false : !cur;
         setState({ reasoning: next });
-        info(`reasoning: ${next ? "on" : "off"}`);
+        void savePreferences({ reasoning: next });
+        info(`reasoning: ${next ? "on" : "off"}  (saved)`);
         return true;
       }
       case "queue": {
@@ -885,15 +913,19 @@ async function main() {
           info(`auto-continue: ${n === 0 ? "off" : `up to ${n} extra budget(s)`}`);
         } else if (t === "off" || t === "0" || t === "false") {
           setState({ autoContinue: 0 });
-          info("auto-continue: off");
+          // Saved as 0 (or absent) — clear via savePreferences with null
+          // so the key is removed from the file when value is "off".
+          void savePreferences({ autoContinue: null });
+          info("auto-continue: off  (saved)");
         } else {
           const n = parseInt(t, 10);
           if (!Number.isFinite(n) || n < 0) {
             info("error: usage: /auto-continue [N|off]");
           } else {
             setState({ autoContinue: n });
+            void savePreferences({ autoContinue: n });
             info(
-              `auto-continue: ${n === 0 ? "off" : `up to ${n} extra budget(s)`}`,
+              `auto-continue: ${n === 0 ? "off" : `up to ${n} extra budget(s)`}  (saved)`,
             );
           }
         }
@@ -902,6 +934,38 @@ async function main() {
       case "version":
         info(formatVersionInfo());
         return true;
+      case "preferences": {
+        const sub = arg.trim().toLowerCase();
+        if (sub === "reset") {
+          await clearPreferences();
+          info(
+            `preferences file deleted (${preferencesPath()}). Current session keeps its in-memory settings; next launch starts with defaults.`,
+          );
+          return true;
+        }
+        if (sub && sub !== "show") {
+          info("error: usage: /preferences [show|reset]");
+          return true;
+        }
+        const saved = await readPreferences();
+        const lines: string[] = [`preferences: ${preferencesPath()}`];
+        const keys: (keyof typeof saved)[] = [
+          "yolo",
+          "reasoning",
+          "autoContinue",
+          "budgetUsd",
+        ];
+        const present = keys.filter((k) => saved[k] !== undefined);
+        if (present.length === 0) {
+          lines.push("  (no preferences saved; defaults apply)");
+        } else {
+          for (const k of present) {
+            lines.push(`  ${k}: ${JSON.stringify(saved[k])}`);
+          }
+        }
+        info(lines.join("\n"));
+        return true;
+      }
       case "mcp": {
         // Status / inspection only for now — connections are established
         // at boot. Future: subcommands for reconnect, disable, etc.
@@ -1501,6 +1565,22 @@ async function main() {
       )
       .join(", ");
     info(`loaded instruction overlays: ${labels}  (/instructions to inspect)`);
+  }
+
+  // Loud announcements for persisted preferences that have real cost
+  // or safety implications. yolo: approvals are off — bypass anything
+  // the model decides. budget: a previously-set ceiling can abort a
+  // turn unexpectedly. The "warning:" prefix triggers the red treatment
+  // in History's MessageRow.
+  if (toolCtx.yolo) {
+    info(
+      "warning: yolo is on — write/edit/bash/web_fetch run without approval. /yolo to disable.",
+    );
+  }
+  if (budgetUsd !== null) {
+    info(
+      `warning: budget set to $${budgetUsd.toFixed(2)} (saved from a previous session). /budget off to clear, /budget <amount> to change.`,
+    );
   }
 
   // Connect any configured MCP servers in the background. We don't block
