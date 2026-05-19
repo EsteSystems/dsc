@@ -1,5 +1,6 @@
 import { describe, it, before, after } from "node:test";
 import assert from "node:assert/strict";
+import * as path from "node:path";
 import {
   apiKeySource,
   computeCostUsd,
@@ -20,14 +21,21 @@ describe("configPath", () => {
   });
 
   it("honors XDG_CONFIG_HOME when set", () => {
-    process.env.XDG_CONFIG_HOME = "/tmp/x/.config";
-    assert.equal(configPath(), "/tmp/x/.config/deepseek/deepseek.json");
+    // Use path.join in both expectation and assertion so the separator
+    // matches the platform — on Windows configPath produces backslashes.
+    const xdg = path.join(path.sep, "tmp", "x", ".config");
+    process.env.XDG_CONFIG_HOME = xdg;
+    assert.equal(
+      configPath(),
+      path.join(xdg, "deepseek", "deepseek.json"),
+    );
   });
 
   it("falls back to ~/.config when XDG_CONFIG_HOME is unset", () => {
     delete process.env.XDG_CONFIG_HOME;
     const p = configPath();
-    assert.ok(p.endsWith("/.config/deepseek/deepseek.json"), `got ${p}`);
+    const tail = path.join(".config", "deepseek", "deepseek.json");
+    assert.ok(p.endsWith(tail), `got ${p}, expected to end with ${tail}`);
   });
 });
 
