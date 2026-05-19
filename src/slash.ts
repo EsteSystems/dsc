@@ -5,6 +5,7 @@ export const SLASH_COMMANDS: ReadonlyArray<string> = [
   "api-key",
   "audit",
   "auto-continue",
+  "budget",
   "clear",
   "compact",
   "copy",

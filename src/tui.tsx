@@ -229,11 +229,19 @@ async function main() {
   };
 
   const sessionStart = Date.now();
+
+  // Per-session USD cost ceiling. `null` = no limit (default).
+  // `/budget` toggles. We pre-turn-check the spend against this and
+  // abort the next prompt when over; `budgetWarned` keeps the 80%
+  // notice from firing on every status tick.
+  let budgetUsd: number | null = null;
+  let budgetWarned = false;
   const promptQueue: string[] = [];
 
   // Push the freshly-computed numbers into the store; StatusBar reads from
   // there. Called after every onTurn and once per second for the timer.
   const syncStatus = () => {
+    const cost = computeCostUsd(stats, model);
     setState({
       model,
       contextTokens: estimateContextTokens(messages),
@@ -246,8 +254,18 @@ async function main() {
       queue: promptQueue.slice(),
       queueDepth: promptQueue.length,
       compacted: !!session.compaction,
-      cost: computeCostUsd(stats, model),
+      cost,
     });
+    // 80% budget warning. Fires once per /budget set; resetting or
+    // changing the budget clears the flag so the next threshold gets
+    // its own notice. Skipped when no budget is configured.
+    if (budgetUsd !== null && !budgetWarned && cost >= budgetUsd * 0.8) {
+      const pct = Math.round((cost / budgetUsd) * 100);
+      info(
+        `budget warning: $${cost.toFixed(4)} of $${budgetUsd.toFixed(2)} (${pct}%). Next turn aborts at $${budgetUsd.toFixed(2)}.`,
+      );
+      budgetWarned = true;
+    }
   };
 
   setState({
@@ -393,6 +411,32 @@ async function main() {
   let pendingAbort: AbortController | null = null;
 
   const runTurn = async (userText: string) => {
+    // Pre-turn budget check. We block at the *start* of the next turn
+    // rather than mid-stream — letting a turn that's already in flight
+    // finish is the less surprising behavior.
+    if (budgetUsd !== null) {
+      // Snapshot the mutable let into a const so TS keeps the non-null
+      // narrowing across the setState closure below.
+      const limit = budgetUsd;
+      const cost = computeCostUsd(stats, model);
+      if (cost >= limit) {
+        // Echo the user's prompt so it doesn't look like input was
+        // swallowed, then explain why nothing's happening.
+        setState((s) => ({
+          history: [
+            ...s.history,
+            { id: `u-${s.history.length}`, role: "user", content: userText },
+            {
+              id: `e-${s.history.length + 1}`,
+              role: "system",
+              content: `error: budget reached ($${cost.toFixed(4)} >= $${limit.toFixed(2)}). /budget off to lift, /budget <amount> to raise.`,
+            },
+          ],
+        }));
+        return;
+      }
+    }
+
     // Push the user message into history immediately so it's visible before
     // the model responds.
     setState((s) => ({
@@ -576,6 +620,7 @@ async function main() {
             "/lang [name|off]        force the model to reply in a language",
             "/auto-continue [N|off]  auto-grant N extra MAX_TOOL_DEPTH budgets",
             "/cost                   show token usage and cost",
+            "/budget [usd|off]       set per-session USD ceiling (warn at 80%, abort at 100%)",
             "/copy                   copy last assistant response to clipboard",
             "/version                show version info",
             "/instructions           list active per-project / per-user instruction overlays",
@@ -702,6 +747,46 @@ async function main() {
       case "cost":
         info(formatCost(stats, model));
         return true;
+      case "budget": {
+        // /budget                -> show current limit + spend
+        // /budget <usd>          -> set a session ceiling
+        // /budget off            -> clear
+        const text = arg.trim().toLowerCase();
+        if (!text) {
+          const cost = computeCostUsd(stats, model);
+          if (budgetUsd === null) {
+            info(
+              `budget: not set  (spent: $${cost.toFixed(4)})\n/budget <usd> to set a limit, /budget off to clear`,
+            );
+          } else {
+            const pct =
+              budgetUsd > 0 ? Math.round((cost / budgetUsd) * 100) : 0;
+            info(
+              `budget: $${budgetUsd.toFixed(2)}  spent: $${cost.toFixed(4)} (${pct}%)  warned: ${budgetWarned ? "yes" : "no"}`,
+            );
+          }
+          return true;
+        }
+        if (text === "off" || text === "none" || text === "0") {
+          budgetUsd = null;
+          budgetWarned = false;
+          info("budget cleared");
+          return true;
+        }
+        const n = parseFloat(text);
+        if (!Number.isFinite(n) || n <= 0) {
+          info("error: usage: /budget <amount-usd> | off");
+          return true;
+        }
+        budgetUsd = n;
+        // Reset the warning flag so the user gets a fresh 80% notice
+        // against the new limit even if they're already over it.
+        budgetWarned = false;
+        info(
+          `budget: $${n.toFixed(2)} (warn at 80%, abort the next turn at 100%)`,
+        );
+        return true;
+      }
       case "copy": {
         // Copy the most recent assistant response to the OS clipboard. The
         // last *assistant* (not tool, not system, not user) is what the
@@ -903,6 +988,15 @@ async function main() {
             `installing ${check.latest} (currently ${check.current}) via npm…`,
           );
           let r = await runUpdate();
+          // ETARGET = npm's registry has the new version's metadata but
+          // the tarball hasn't propagated to all CDN edges yet (common
+          // for the first minute or two after `npm publish`). Wait
+          // briefly and retry once before surfacing as a failure.
+          if (!r.ok && /ETARGET/i.test(r.output)) {
+            info("tarball not on all CDN edges yet (ETARGET); retrying in 8s…");
+            await new Promise((res) => setTimeout(res, 8000));
+            r = await runUpdate();
+          }
           // Auto-recover from EACCES on Linux/macOS: offer to set
           // npm's prefix under ~/.local so the install doesn't need
           // sudo, optionally append the PATH export to the user's

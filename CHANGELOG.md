@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- `/budget [usd|off]` sets a per-session USD ceiling. One-time `info()` warning at 80% of the limit; the next turn after the limit is reached refuses to send with a clear error pointing at `/budget off` and `/budget <amount>`. Catches runaway `/auto-continue` loops where you walk away from dsc and come back to a $4 conversation. Session-scoped (not persisted across restarts); resetting the limit clears the warned flag so the new threshold gets its own notice.
+
+### Fixed
+- `/update` now retries once after an 8 s delay when npm fails with `ETARGET` — the publish-propagation race where the registry's metadata is updated but the tarball hasn't reached every CDN edge yet. Stops legitimate "yes there's a newer version but I can't install it" failures in the minute or two after `npm publish`.
+
 ## [0.6.0] - 2026-05-19
 
 ### Added
