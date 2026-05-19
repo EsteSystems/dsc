@@ -137,7 +137,7 @@ async function main() {
   if (cli.help) {
     process.stdout.write(
       [
-        "dsc — CLI coding agent for DeepSeek",
+        "dsc — Dev Shell Companion (CLI coding agent for DeepSeek)",
         "",
         "Usage:",
         "  dsc                            Start the TUI",
@@ -1520,7 +1520,7 @@ async function main() {
 
   if (!alreadyWelcomed) {
     const lines: string[] = [
-      "Welcome to dsc — a CLI coding agent for DeepSeek.",
+      "Welcome to dsc — Dev Shell Companion. A CLI coding agent in your terminal.",
       "",
       "  /help            full command list (TAB completes any /command)",
       "  Up / Down        recall past prompts",

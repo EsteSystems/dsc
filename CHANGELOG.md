@@ -7,6 +7,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+- Rebranded `dsc` → **Dev Shell Companion** (still abbreviated `dsc`, same binary, same npm package). The name `dsc` historically read as "DeepSeek Client"; making it provider-agnostic reverse-acronym sets up the multi-provider work coming in 1.x without forcing a rename or fork. User-facing surfaces updated: README intro, `package.json` description, system prompt opening, `--help` header, welcome panel. System prompt edit costs one prefix-cache bust on every existing session's first turn, same as any other SYSTEM_PROMPT change.
+
 ### Added
 - Slash-set toggle preferences (`/yolo`, `/reasoning`, `/auto-continue`, `/budget`) now persist to `~/.config/dsc/preferences.json` (XDG-aware) and apply on the next launch. Boot precedence: command-line flags > saved preferences > defaults. `$DSC_AUTO_CONTINUE` still wins over the saved auto-continue value for scripted invocations.
 - Loud red `warning:` announcement on launch when persisted `yolo` is on or a persisted `budget` is active — keeps a forgotten-from-last-session setting from silently bypassing approvals or aborting a turn.

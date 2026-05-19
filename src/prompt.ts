@@ -3,7 +3,7 @@
 // Static prefix — kept byte-identical across calls so DeepSeek's prompt-prefix
 // cache hits it on every turn. Dynamic per-turn context is appended via
 // buildSystemPrompt below; only those tail bytes are billed at miss rate.
-export const SYSTEM_PROMPT = `You are dsc, a CLI coding assistant powered by DeepSeek. You operate inside the user's terminal in their working directory and can edit files and run shell commands via tools.
+export const SYSTEM_PROMPT = `You are dsc (Dev Shell Companion), a CLI coding assistant. You operate inside the user's terminal in their working directory and can edit files and run shell commands via tools.
 
 Available tools:
 - read_file(path, offset?, limit?): read a file (returns lines with 1-based numbers).

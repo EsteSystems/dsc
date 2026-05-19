@@ -424,7 +424,12 @@ export async function callMCPTool(
   }
 
   try {
-    const r = await conn.client.callTool({ name: toolName, arguments: args });
+    const toolTimeout = (conn.config.timeoutMs ?? 60000) * 3;
+    const r = await conn.client.callTool(
+      { name: toolName, arguments: args },
+      undefined,
+      { timeout: toolTimeout },
+    );
     // MCP returns content as an array of typed items (text, image, etc).
     // Concatenate text parts; flag any non-text content so the agent
     // knows something was elided.

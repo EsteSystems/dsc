@@ -8,7 +8,7 @@ describe("buildSystemPrompt", () => {
   it("starts with the static SYSTEM_PROMPT (cache prefix)", () => {
     const p = buildSystemPrompt({ cwd: "/home/x", date: FIXED_DATE });
     assert.ok(
-      p.startsWith("You are dsc, a CLI coding assistant"),
+      p.startsWith("You are dsc"),
       "prompt should open with the stable system text",
     );
   });

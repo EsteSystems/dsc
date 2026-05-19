@@ -1,18 +1,21 @@
-# dsc
+# dsc — Dev Shell Companion
 
 [![npm version](https://img.shields.io/npm/v/@este.systems/dsc.svg)](https://www.npmjs.com/package/@este.systems/dsc)
 [![npm downloads](https://img.shields.io/npm/dw/@este.systems/dsc.svg)](https://www.npmjs.com/package/@este.systems/dsc)
 [![license](https://img.shields.io/npm/l/@este.systems/dsc.svg)](LICENSE)
 [![node](https://img.shields.io/node/v/@este.systems/dsc.svg)](https://nodejs.org)
 
-A CLI coding agent for [DeepSeek](https://api-docs.deepseek.com/).
-Streams responses, calls tools (`bash`, `read_file`, `write_file`, `edit_file`,
-`grep`, `glob`, `web_fetch`, `web_search`, `task_*`), keeps per-cwd sessions,
-and runs as a [ink](https://github.com/vadimdemedes/ink)-based TUI — prompt +
-status bar pinned at the bottom, finalized turns kept in normal scrollback so
-they stay selectable and copy/paste-able. One-shot mode (`dsc "prompt"`) runs
-the agent against stdout and exits without rendering ink, so it pipes cleanly
-into scripts.
+A CLI coding agent that lives in your terminal: streams responses, calls
+tools (`bash`, `read_file`, `write_file`, `edit_file`, `grep`, `glob`,
+`web_fetch`, `web_search`, `task_*`), connects to MCP servers, keeps
+per-cwd sessions, and runs as an [ink](https://github.com/vadimdemedes/ink)-based
+TUI — prompt + status bar pinned at the bottom, finalized turns kept in
+normal scrollback so they stay selectable and copy/paste-able. One-shot
+mode (`dsc "prompt"`) runs the agent against stdout and exits without
+rendering ink, so it pipes cleanly into scripts.
+
+Currently powered by [DeepSeek](https://api-docs.deepseek.com/);
+multi-provider support (Claude, OpenAI, Ollama) is on the roadmap.
 
 ## Install
 
