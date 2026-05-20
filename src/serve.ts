@@ -53,6 +53,11 @@ export async function serve(port = PORT): Promise<void> {
   const wss = new WebSocketServer({ port, host: "127.0.0.1" });
   console.error(`dsc serve — ws://127.0.0.1:${port}  (pid ${process.pid})`);
 
+  // Suppress server-level errors from unclean client disconnects
+  wss.on("error", (err: Error) => {
+    console.error("server error:", err.message);
+  });
+
   // Connect MCP servers in the background. Clients that connect before MCP is
   // ready will see prompts run without MCP tools; MCP tools become available
   // as connections finish.
@@ -76,6 +81,11 @@ export async function serve(port = PORT): Promise<void> {
   wss.on("connection", (ws: WebSocket) => {
     console.error("client connected");
     let messages: Message[] = [];
+
+    // Suppress WebSocket errors so an unclean client disconnect doesn't crash the daemon
+    ws.on("error", (err: Error) => {
+      console.error("client error:", err.message);
+    });
 
     // Hello
     send(ws, {
