@@ -13,15 +13,24 @@ const tsxBin = join(pkgRoot, "node_modules", ".bin", "tsx");
 const tsxBinCmd = process.platform === "win32" ? tsxBin + ".cmd" : tsxBin;
 
 const argv = process.argv.slice(2);
-const srcEntry = join(pkgRoot, "src", "tui.tsx");
-const distEntry = join(pkgRoot, "dist", "tui.js");
 const tsxAvailable = existsSync(tsxBin) || existsSync(tsxBinCmd);
 
+// ── Subcommand dispatch ─────────────────────────────────────────────
+// `dsc serve` routes to the WebSocket daemon; anything else uses the TUI.
+
+const subcommand = argv[0];
+const isServe = subcommand === "serve";
+
+const srcEntry = join(
+  pkgRoot, "src", isServe ? "serve.ts" : "tui.tsx",
+);
+const distEntry = join(
+  pkgRoot, "dist", isServe ? "serve.js" : "tui.js",
+);
+
+if (isServe) argv.shift(); // strip "serve" from args
+
 if (tsxAvailable && existsSync(srcEntry)) {
-  // Dev: run TS sources directly. Live changes pick up on next launch.
-  // On Windows, npm installs shim .cmd alongside the bare executable —
-  // spawn with shell:true so either is found, and quote argv values that
-  // might contain spaces (e.g. paths in C:\Program Files\...).
   const child = spawn(
     process.platform === "win32" ? tsxBinCmd : tsxBin,
     [srcEntry, ...argv],
@@ -32,12 +41,7 @@ if (tsxAvailable && existsSync(srcEntry)) {
     else process.exit(code ?? 0);
   });
 } else {
-  // Fallback: production-style install without devDeps. Use the compiled
-  // output instead. Run `npm run build` to refresh `dist/`.
-  //
-  // Dynamic import() requires a file:// URL on Windows (an absolute path
-  // like `C:\path\file.js` gets parsed with `c:` as a URL scheme, which
-  // fails with ERR_UNSUPPORTED_ESM_URL_SCHEME). pathToFileURL handles
-  // the conversion correctly on every platform.
+  // Fallback: compiled output from `npm run build`.
+  // Needs `import()` which requires file:// URL on Windows.
   await import(pathToFileURL(distEntry).href);
 }
