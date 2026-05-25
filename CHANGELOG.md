@@ -7,6 +7,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.1.1] - 2026-05-25
+
+### Documentation
+- Document `dsc serve` daemon. New `## Headless mode (dsc serve)` README section covers usage, the WebSocket protocol table (hello / token / thinking / tool / tool_result / notice / approval_request / turn_end inbound and outbound), a `wscat` quick-try, the `ws` optional-dependency caveat, and points at `docs/headless-serve-plan.md` for the multi-client / approval round-trip roadmap. `dsc --help` now lists the `serve` subcommand alongside TUI and one-shot. No behavior change — strictly docs the marquee 1.1.0 feature should have shipped with.
+
 ## [1.1.0] - 2026-05-25
 
 ### Changed
