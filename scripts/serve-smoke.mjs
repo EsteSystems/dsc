@@ -1,7 +1,12 @@
 /**
- * Quick smoke test for dsc serve.
- * Run:  node src/serve_test.mjs
- * Requires: dsc serve running on localhost:PORT
+ * Quick smoke test for `dsc serve`.
+ *
+ * Run:        node scripts/serve-smoke.mjs
+ * Requires:   `dsc serve --port 9096` running in another terminal
+ *
+ * Lives in scripts/ (not tests/, not src/) so node --test's
+ * auto-discovery doesn't pick it up — it requires a live daemon
+ * and is meant to be invoked manually.
  */
 import { WebSocket } from "ws";
 
