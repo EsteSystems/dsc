@@ -7,18 +7,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-### Fixed
-- MCP stdio servers no longer corrupt the TUI on boot. The SDK's default `stderr: "inherit"` forwarded child stderr (Python `logging`, JS `console.error`, TLS handshakes, anything) straight to dsc's terminal. Each stray write displaced ink's pinned status bar; the next 1-second `syncStatus` tick painted a fresh frame below the old one, so users with N MCP servers saw up to N stacked status bars during boot. Now stdio transports get `stderr: "pipe"` + the child's stderr piped to `~/.local/state/dsc/mcp-<server>.log` (XDG-aware) with a session-header line on each connection. TUI stays clean; debugging output stays accessible.
+## [1.1.0] - 2026-05-25
 
 ### Changed
 - **Config file relocated** from `~/.config/deepseek/deepseek.json` to `~/.config/dsc/config.json` (XDG-aware). The old path was a leftover from the pre-rebrand days; the new path matches the binary name and XDG conventions. On first launch with the new version, dsc copies the legacy file forward to the new path and prints a one-line `migrated config:` notice (TUI `info()` line; stderr in one-shot mode). The legacy file is left in place — paranoid about destroying user-curated config — so existing tooling that still reads `deepseek.json` keeps working. Once you've confirmed the new file is good, the old one is safe to delete. Repo template renamed `deepseek.json.example` → `config.json.example`. Writers (`/api-key`, `/search key`) automatically target the new path. New helpers: `legacyConfigPath()`, `migrateLegacyConfigIfNeeded()`, `consumeConfigMigrationNotice()`. New `tests/api.test.ts` migration suite (5 scenarios: no-op, new-exists-wins, fresh copy + once-only notice, idempotent re-run, lazy `getConfig()` trigger).
 - Rebranded `dsc` → **Dev Shell Companion** (still abbreviated `dsc`, same binary, same npm package). The name `dsc` historically read as "DeepSeek Client"; making it provider-agnostic reverse-acronym sets up the multi-provider work coming in 1.x without forcing a rename or fork. User-facing surfaces updated: README intro, `package.json` description, system prompt opening, `--help` header, welcome panel. System prompt edit costs one prefix-cache bust on every existing session's first turn, same as any other SYSTEM_PROMPT change.
 
 ### Added
+- `dsc serve` — headless WebSocket daemon. New subcommand boots a WebSocket server on `localhost:9090` (configurable via `--port`) and accepts prompts over a typed JSON protocol (`hello`, `prompt`, `approval_response`, `slash` inbound; `token`, `thinking`, `tool`, `tool_result`, `notice`, `approval_request`, `turn_end` outbound). Enables integration with editors, other agents, and remote frontends without dragging ink into the consumer's environment. `ws` added as an `optionalDependency` so users who don't run the daemon don't pay for it. Protocol shapes live in `src/serve_protocol.ts`; smoke test in `scripts/serve-smoke.mjs`. Multi-phase plan in `docs/headless-serve-plan.md` (Phase 1 shipping; slash dispatch + multi-client coordination land in 1.x).
 - Slash-set toggle preferences (`/yolo`, `/reasoning`, `/auto-continue`, `/budget`) now persist to `~/.config/dsc/preferences.json` (XDG-aware) and apply on the next launch. Boot precedence: command-line flags > saved preferences > defaults. `$DSC_AUTO_CONTINUE` still wins over the saved auto-continue value for scripted invocations.
 - Loud red `warning:` announcement on launch when persisted `yolo` is on or a persisted `budget` is active — keeps a forgotten-from-last-session setting from silently bypassing approvals or aborting a turn.
 - `/preferences` slash command: show the saved preferences and the file path; `/preferences reset` deletes the file (current session keeps its in-memory state).
-- New `tests/preferences.test.ts` (9 tests): round-trip, merge semantics, `null`-clears-key, malformed/corrupt file handling, budget validation. Total 78 tests across 14 suites.
+- New `tests/preferences.test.ts` (9 tests): round-trip, merge semantics, `null`-clears-key, malformed/corrupt file handling, budget validation. Total 84 tests across 15 suites with the new config-migration suite.
+
+### Fixed
+- `dsc serve` daemon no longer crashes when a client disconnects without sending a proper WebSocket close frame. The Python `websockets` library (and others) drop the connection without the handshake; without `ws.on('error')` and `wss.on('error')` handlers, the resulting unhandled error event took the whole daemon down. Both error events now log and continue.
+
+## [1.0.2] - 2026-05-25
+
+### Fixed
+- MCP stdio servers no longer corrupt the TUI on boot. The SDK's default `stderr: "inherit"` forwarded child stderr (Python `logging`, JS `console.error`, `tqdm` progress bars, TLS handshakes, anything) straight to dsc's terminal. Each stray write displaced ink's pinned status bar; the next 1-second `syncStatus` tick painted a fresh frame below the old one, so users with N MCP servers saw up to N stacked status bars during boot. Now stdio transports get `stderr: "pipe"` + the child's stderr piped to `~/.local/state/dsc/mcp-<server>.log` (XDG-aware) with a session-header line on each connection. TUI stays clean; debugging output stays accessible.
 
 ## [1.0.1] - 2026-05-20
 
