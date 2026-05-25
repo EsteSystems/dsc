@@ -65,7 +65,20 @@ import {
 } from "./update.js";
 import { copyToClipboard } from "./clipboard.js";
 
-const AUTO_COMPACT_AT_TOKENS = Number(process.env.DSC_AUTO_COMPACT ?? "0") || 0;
+// Auto-compact threshold (token-count of estimated context). Default
+// 50K — well below the 1M model limit, but tuned to keep per-turn input
+// cost from creeping. Override via DSC_AUTO_COMPACT_AT; set to "0" /
+// "off" / "false" to disable. Matches the env-var name documented in
+// README + ENV table; the earlier TUI port read the wrong variable
+// (DSC_AUTO_COMPACT) and defaulted to 0, silently disabling
+// auto-compact for everyone since 0.2.0.
+const AUTO_COMPACT_AT_TOKENS = (() => {
+  const raw = process.env.DSC_AUTO_COMPACT_AT;
+  if (!raw) return 50_000;
+  if (raw === "0" || raw === "off" || raw === "false") return 0;
+  const n = parseInt(raw, 10);
+  return Number.isFinite(n) && n > 0 ? n : 50_000;
+})();
 const AUTO_COMPACT_KEEP = Number(process.env.DSC_AUTO_COMPACT_KEEP ?? "4") || 4;
 
 interface CliParse {
