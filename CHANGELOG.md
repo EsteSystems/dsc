@@ -7,6 +7,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.0.2] - 2026-05-25
+
+### Fixed
+- MCP stdio servers no longer corrupt the TUI on boot. The SDK's default `stderr: "inherit"` forwarded child stderr (Python `logging`, JS `console.error`, `tqdm` progress bars, TLS handshakes, anything) straight to dsc's terminal. Each stray write displaced ink's pinned status bar; the next 1-second `syncStatus` tick painted a fresh frame below the old one, so users with N MCP servers saw up to N stacked status bars during boot. Now stdio transports get `stderr: "pipe"` + the child's stderr piped to `~/.local/state/dsc/mcp-<server>.log` (XDG-aware) with a session-header line on each connection. TUI stays clean; debugging output stays accessible.
+
 ## [1.0.1] - 2026-05-20
 
 ### Fixed
@@ -209,7 +214,8 @@ Initial public release.
 - DECSTBM-pinned status bar.
 - Cross-platform packaging (`npm pack` + per-OS installer scripts).
 
-[Unreleased]: https://github.com/EsteSystems/dsc/compare/v1.0.1...HEAD
+[Unreleased]: https://github.com/EsteSystems/dsc/compare/v1.0.2...HEAD
+[1.0.2]: https://github.com/EsteSystems/dsc/compare/v1.0.1...v1.0.2
 [1.0.1]: https://github.com/EsteSystems/dsc/compare/v1.0.0...v1.0.1
 [1.0.0]: https://github.com/EsteSystems/dsc/compare/v0.6.0...v1.0.0
 [0.6.0]: https://github.com/EsteSystems/dsc/compare/v0.5.3...v0.6.0
