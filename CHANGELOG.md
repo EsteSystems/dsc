@@ -7,6 +7,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.0.1] - 2026-05-20
+
+### Fixed
+- Auto-compact silently disabled since 0.2.0. The TUI's port of the auto-compact wiring read `process.env.DSC_AUTO_COMPACT` instead of the documented `DSC_AUTO_COMPACT_AT`, and defaulted to `0` (disabled) instead of the REPL's `50_000`. Users setting the documented env var got nothing; users without it got auto-compact off entirely, so `/transcript` and the prompt cache silently bloated turn-after-turn. Fix restores the REPL's behavior: read `DSC_AUTO_COMPACT_AT`, default `50_000`, accept `"off"` / `"0"` / `"false"` as explicit disables.
+
 ## [1.0.0] - 2026-05-19
 
 First stable release. The TUI, the agent loop, the tool surface, the
@@ -204,7 +209,8 @@ Initial public release.
 - DECSTBM-pinned status bar.
 - Cross-platform packaging (`npm pack` + per-OS installer scripts).
 
-[Unreleased]: https://github.com/EsteSystems/dsc/compare/v1.0.0...HEAD
+[Unreleased]: https://github.com/EsteSystems/dsc/compare/v1.0.1...HEAD
+[1.0.1]: https://github.com/EsteSystems/dsc/compare/v1.0.0...v1.0.1
 [1.0.0]: https://github.com/EsteSystems/dsc/compare/v0.6.0...v1.0.0
 [0.6.0]: https://github.com/EsteSystems/dsc/compare/v0.5.3...v0.6.0
 [0.5.3]: https://github.com/EsteSystems/dsc/compare/v0.5.2...v0.5.3
