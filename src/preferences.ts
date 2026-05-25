@@ -3,7 +3,7 @@
  *
  * Stored at `$XDG_CONFIG_HOME/dsc/preferences.json` (default
  * `~/.config/dsc/preferences.json`) — deliberately a separate file
- * from the API-credential `deepseek.json` so dsc's UI prefs don't
+ * from the API-credential `config.json` so dsc's UI prefs don't
  * mix with secrets and so removing one doesn't affect the other.
  *
  * What's persisted (only toggle-shaped settings the user explicitly

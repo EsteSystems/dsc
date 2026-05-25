@@ -3,13 +3,13 @@
  *
  * Lets the user point dsc at one or more remote MCP servers (Tavily,
  * filesystem, GitHub, custom, ...) via a `mcp.servers` block in
- * deepseek.json. At boot we connect each enabled server, ask for its
+ * config.json. At boot we connect each enabled server, ask for its
  * tool list, and expose those tools to the agent as additional callable
  * tools alongside the built-ins (read_file, bash, etc).
  *
- * Phase 1 (this file): HTTP transport only. Stdio transport (for local
- * subprocess servers) is a future addition — it requires child-process
- * lifecycle management we don't need yet.
+ * Both HTTP (Streamable HTTP) and stdio transports are supported.
+ * Stdio servers have their stderr piped to ~/.local/state/dsc/mcp-<name>.log
+ * so noisy logging libraries don't corrupt ink's pinned frame.
  *
  * Naming: server-provided tool `foo` reachable through server name
  * `tavily` is advertised to the model as `mcp_tavily_foo`. The `mcp_`
@@ -186,7 +186,7 @@ export function expandEnv(input: string, where: string): string {
   });
 }
 
-/** Read mcp.servers from deepseek.json (via the same cache api.ts uses). */
+/** Read mcp.servers from config.json (via the same cache api.ts uses). */
 export function loadMCPConfig(): Record<string, MCPServerConfig> {
   const cfg = getConfig();
   if (!cfg) return {};

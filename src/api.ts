@@ -75,12 +75,20 @@ export class DeepSeekError extends Error {
   }
 }
 
-import { readFileSync } from "node:fs";
+import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { promises as fsp } from "node:fs";
 import { homedir } from "node:os";
 import * as nodePath from "node:path";
 
+/** Current config location: ~/.config/dsc/config.json (XDG-aware). */
 export function configPath(): string {
+  const xdg = process.env.XDG_CONFIG_HOME;
+  const base = xdg && xdg.length ? xdg : nodePath.join(homedir(), ".config");
+  return nodePath.join(base, "dsc", "config.json");
+}
+
+/** Legacy location, kept for one-time migration. Pre-1.1.0 dsc wrote here. */
+export function legacyConfigPath(): string {
   const xdg = process.env.XDG_CONFIG_HOME;
   const base = xdg && xdg.length ? xdg : nodePath.join(homedir(), ".config");
   return nodePath.join(base, "deepseek", "deepseek.json");
@@ -88,19 +96,90 @@ export function configPath(): string {
 
 let _cachedKey: string | undefined;
 let _cachedConfig: Record<string, unknown> | null | undefined;
+let _migratedFromLegacy: string | null = null;
 
-// Returns the parsed deepseek.json (cached). null when the file doesn't exist;
-// throws DeepSeekError on invalid JSON. Shared by getApiKey and the search
-// module so secrets and provider config can live in one place.
+/**
+ * If the new config path is missing but the legacy path exists, copy the
+ * legacy file forward to the new path. The legacy file is left in place
+ * — paranoid about destroying user-curated config. Returns the legacy
+ * path on a fresh migration, null otherwise.
+ *
+ * Idempotent. Safe to call multiple times; only the first migration
+ * actually copies. Surfaces the result via `consumeConfigMigrationNotice()`
+ * so the TUI can `info()` it once at boot.
+ */
+export function migrateLegacyConfigIfNeeded(): string | null {
+  const newPath = configPath();
+  // Already migrated or new file was created directly — nothing to do.
+  try {
+    readFileSync(newPath, "utf8");
+    return null;
+  } catch {
+    // new doesn't exist; try legacy
+  }
+  const legacy = legacyConfigPath();
+  let text: string;
+  try {
+    text = readFileSync(legacy, "utf8");
+  } catch {
+    return null; // no legacy either; fresh-install path
+  }
+  try {
+    mkdirSync(nodePath.dirname(newPath), { recursive: true });
+    writeFileSync(newPath, text, { encoding: "utf8", mode: 0o600 });
+  } catch {
+    // Migration write failed (perms, disk full). Caller still reads from
+    // the legacy path via getConfig's fallback; the user is unblocked.
+    return null;
+  }
+  _migratedFromLegacy = legacy;
+  return legacy;
+}
+
+/**
+ * Consume the migration notice — returns the legacy path that was just
+ * migrated from, or null. After this call the notice is cleared so a
+ * second consumer doesn't double-print.
+ */
+export function consumeConfigMigrationNotice(): string | null {
+  const v = _migratedFromLegacy;
+  _migratedFromLegacy = null;
+  return v;
+}
+
+/**
+ * Reset all in-process config caches. Test-only — exported so test
+ * suites can re-exercise the migration / read paths across multiple
+ * scenarios without running each in a fresh subprocess.
+ */
+export function _resetConfigCachesForTests(): void {
+  _cachedKey = undefined;
+  _cachedConfig = undefined;
+  _migratedFromLegacy = null;
+}
+
+// Returns the parsed config (cached). null when neither the new nor the
+// legacy file exists; throws DeepSeekError on invalid JSON. Shared by
+// getApiKey and the search/mcp modules so secrets + provider + MCP
+// config can live in one place.
 export function getConfig(): Record<string, unknown> | null {
   if (_cachedConfig !== undefined) return _cachedConfig;
+  // One-time migration from the deepseek/deepseek.json legacy location.
+  // No-op if already migrated or no legacy file exists.
+  migrateLegacyConfigIfNeeded();
   const p = configPath();
   let text: string;
   try {
     text = readFileSync(p, "utf8");
   } catch {
-    _cachedConfig = null;
-    return null;
+    // Migration may have failed; fall back to reading the legacy file
+    // directly so a perms-blocked migration doesn't take dsc down.
+    try {
+      text = readFileSync(legacyConfigPath(), "utf8");
+    } catch {
+      _cachedConfig = null;
+      return null;
+    }
   }
   // Strip UTF-8 BOM if present. PowerShell 5.1's `Set-Content -Encoding utf8`
   // writes one by default, which would otherwise break JSON.parse with a

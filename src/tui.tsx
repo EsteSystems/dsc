@@ -16,6 +16,7 @@ import {
   apiKeySource,
   computeCostUsd,
   configPath,
+  consumeConfigMigrationNotice,
   hasApiKey,
   recordUsage,
   saveApiKey,
@@ -1479,6 +1480,13 @@ async function main() {
     // (no events, no ink) and exit. Session state still loads + persists so
     // subsequent interactive runs see the new turn.
     clearInterval(timerId);
+    // Migration notice goes to stderr so stdout stays clean for piping.
+    const migratedFromOneShot = consumeConfigMigrationNotice();
+    if (migratedFromOneShot) {
+      process.stderr.write(
+        `migrated config: copied ${migratedFromOneShot} → ${configPath()}\n`,
+      );
+    }
     messages.push({ role: "user", content: cli.prompt });
     pendingAbort = new AbortController();
     try {
@@ -1512,6 +1520,17 @@ async function main() {
   }
 
   mountApp();
+
+  // Surface a one-time notice when the config was just copied forward
+  // from the legacy ~/.config/deepseek/deepseek.json location. The copy
+  // already happened lazily inside hasApiKey() above; we only print.
+  // The legacy file is left intact in case the user has tooling reading it.
+  const migratedFrom = consumeConfigMigrationNotice();
+  if (migratedFrom) {
+    info(
+      `migrated config: copied ${migratedFrom} → ${configPath()}. The old file was left in place; safe to delete once you've confirmed the new one works.`,
+    );
+  }
 
   // One-time welcome panel. Stamped via a touch-file under XDG_STATE_HOME
   // so we never nag the same user twice. New users get an orientation

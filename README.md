@@ -131,30 +131,36 @@ to your `PATH` and reopen the terminal.
 > /api-key sk-...
 ```
 
-That writes `~/.config/deepseek/deepseek.json` with `0600` perms,
+That writes `~/.config/dsc/config.json` with `0600` perms,
 preserving any other fields (e.g. search-provider keys) already in the
 file. You can also set `$DEEPSEEK_API_KEY` in your shell — it takes
 priority over the file.
 
+> **Upgrading from <1.1.0:** dsc reads from `~/.config/dsc/config.json` now.
+> On first launch with the new version it will copy your existing
+> `~/.config/deepseek/deepseek.json` forward automatically and print a
+> one-line notice. The legacy file is left in place; delete it once you've
+> confirmed everything works.
+
 The rest of this section walks through the manual file setup if you'd
 rather do it yourself. A ready-to-edit template lives at the repo
-root: **[`deepseek.json.example`](deepseek.json.example)**. Copy it to
+root: **[`config.json.example`](config.json.example)**. Copy it to
 the config path below and replace the placeholder values:
 
 ```sh
 # Linux / macOS:
-mkdir -p ~/.config/deepseek
-cp deepseek.json.example ~/.config/deepseek/deepseek.json
-chmod 600 ~/.config/deepseek/deepseek.json
-$EDITOR ~/.config/deepseek/deepseek.json
+mkdir -p ~/.config/dsc
+cp config.json.example ~/.config/dsc/config.json
+chmod 600 ~/.config/dsc/config.json
+$EDITOR ~/.config/dsc/config.json
 ```
 
 ```powershell
 # Windows PowerShell:
-$dir = "$HOME\.config\deepseek"
+$dir = "$HOME\.config\dsc"
 New-Item -ItemType Directory -Force -Path $dir | Out-Null
-Copy-Item deepseek.json.example "$dir\deepseek.json"
-notepad "$dir\deepseek.json"
+Copy-Item config.json.example "$dir\config.json"
+notepad "$dir\config.json"
 ```
 
 The template's full contents:
@@ -178,11 +184,11 @@ dsc reads this file from a platform-dependent path:
 
 | Platform | Default path |
 |---|---|
-| Linux / macOS | `~/.config/deepseek/deepseek.json` |
-| Windows | `%USERPROFILE%\.config\deepseek\deepseek.json` |
+| Linux / macOS | `~/.config/dsc/config.json` |
+| Windows | `%USERPROFILE%\.config\dsc\config.json` |
 
 On Windows, `%USERPROFILE%` is `C:\Users\<your account name>`, so the
-absolute path is e.g. `C:\Users\dann\.config\deepseek\deepseek.json`.
+absolute path is e.g. `C:\Users\dann\.config\dsc\config.json`.
 Set `XDG_CONFIG_HOME` to override the location on any platform.
 
 The env var `DEEPSEEK_API_KEY` takes priority over the file when both
@@ -191,21 +197,21 @@ are set.
 ### Linux / macOS
 
 ```sh
-mkdir -p ~/.config/deepseek
-cat > ~/.config/deepseek/deepseek.json <<'JSON'
+mkdir -p ~/.config/dsc
+cat > ~/.config/dsc/config.json <<'JSON'
 {
   "api_key": "sk-..."
 }
 JSON
-chmod 600 ~/.config/deepseek/deepseek.json
+chmod 600 ~/.config/dsc/config.json
 ```
 
 ### Windows — PowerShell
 
 ```powershell
-$dir = "$HOME\.config\deepseek"
+$dir = "$HOME\.config\dsc"
 New-Item -ItemType Directory -Force -Path $dir | Out-Null
-'{"api_key":"sk-..."}' | Set-Content -Path "$dir\deepseek.json" -Encoding utf8NoBOM
+'{"api_key":"sk-..."}' | Set-Content -Path "$dir\config.json" -Encoding utf8NoBOM
 ```
 
 `-Encoding utf8NoBOM` matters: PowerShell 5.1's `Set-Content -Encoding
@@ -216,8 +222,8 @@ form keeps the file portable. PowerShell 7+ defaults to no-BOM.
 ### Windows — cmd.exe
 
 ```bat
-mkdir "%USERPROFILE%\.config\deepseek"
-echo {"api_key":"sk-..."} > "%USERPROFILE%\.config\deepseek\deepseek.json"
+mkdir "%USERPROFILE%\.config\dsc"
+echo {"api_key":"sk-..."} > "%USERPROFILE%\.config\dsc\config.json"
 ```
 
 ### Or skip the file: env var
@@ -289,7 +295,7 @@ ghost-text suggestion previews the match as you type.
 
 | Command | What it does |
 |---|---|
-| `/api-key [key]` | Show where the key is loaded from (env / config file / unset). With a key arg, write it to `~/.config/deepseek/deepseek.json` with `0600` perms. When unset, prints the DeepSeek signup URL. |
+| `/api-key [key]` | Show where the key is loaded from (env / config file / unset). With a key arg, write it to `~/.config/dsc/config.json` with `0600` perms. When unset, prints the DeepSeek signup URL. |
 | `/search` / `/search use <p>` / `/search key <p> [key]` | Inspect / switch the active search provider, or show / save a per-provider key. No-arg prints active provider + key status + signup URLs. `use brave\|tavily\|ddg` writes `search.provider`. `key <provider> [key]` shows signup URL when no key, saves under `search.<provider>.api_key` when given one. |
 | `/update` | Force-check npm for a newer release and install it (`npm install -g @este.systems/dsc@latest`). The TUI also checks once a day in the background and surfaces a one-line "X available" notice when behind. |
 | `/copy` | Copy the most recent assistant response to the OS clipboard (pbcopy / clip / wl-copy / xclip / xsel). |
@@ -453,7 +459,7 @@ cache prefix and because the model parses them every turn.
 
 dsc can connect to remote [MCP](https://modelcontextprotocol.io) servers
 at boot and expose their tools to the agent alongside the built-ins.
-Configure under `mcp.servers` in `~/.config/deepseek/deepseek.json`:
+Configure under `mcp.servers` in `~/.config/dsc/config.json`:
 
 ```jsonc
 {
@@ -572,7 +578,7 @@ you'll want to truncate it yourself.
 
 | Path | What |
 |---|---|
-| `~/.config/deepseek/deepseek.json` | API key (and search-provider keys). 0600. |
+| `~/.config/dsc/config.json` | API key (and search-provider keys). 0600. Pre-1.1.0 dsc wrote to `~/.config/deepseek/deepseek.json`; that file is copied forward on first launch. |
 | `~/.local/share/dsc/sessions/<id>.json` | One file per session. |
 | `~/.local/state/dsc/history` | Up/down arrow recall (1000-line cap). |
 | `~/.local/state/dsc/audit.log` | JSONL, append-only. |
@@ -585,7 +591,7 @@ XDG variables observed: `XDG_CONFIG_HOME`, `XDG_STATE_HOME`, `XDG_DATA_HOME`.
 
 | Var | Default | Purpose |
 |---|---|---|
-| `DEEPSEEK_API_KEY` | (read from config file) | Overrides the `api_key` in `deepseek.json`. |
+| `DEEPSEEK_API_KEY` | (read from config file) | Overrides the `api_key` in `config.json`. |
 | `DSC_AUTO_COMPACT_AT` | `50000` | Token threshold for auto-compact. `0`/`off`/`false` disables. |
 | `DSC_AUTO_CONTINUE` | `0` | When the agent hits the per-turn tool-call cap, auto-grant up to N extra 24-call budgets before stopping. `0`/`off`/`false` keeps the manual "type continue" prompt. |
 | `DSC_NO_AUDIT` | (off) | `1` disables the JSONL audit log. |

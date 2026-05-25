@@ -26,7 +26,7 @@ export class SearchError extends Error {
 
 // Resolution order:
 //   1. DSC_SEARCH_PROVIDER env var
-//   2. config.search.provider in the deepseek.json
+//   2. config.search.provider in config.json
 //   3. "ddg" (no key required)
 export function getProvider(): ProviderId {
   const env = process.env.DSC_SEARCH_PROVIDER?.trim().toLowerCase();
