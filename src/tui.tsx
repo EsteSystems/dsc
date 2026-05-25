@@ -156,6 +156,7 @@ async function main() {
         "Usage:",
         "  dsc                            Start the TUI",
         "  dsc \"your prompt here\"         One-shot: run and exit",
+        "  dsc serve [--port <n>]         Headless WebSocket daemon (default 127.0.0.1:9090)",
         "",
         "Flags:",
         "  -m, --model <name>             " + AVAILABLE_MODELS.join(" | "),

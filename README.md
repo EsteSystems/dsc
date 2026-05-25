@@ -513,6 +513,68 @@ Example with both transports:
 }
 ```
 
+## Headless mode (`dsc serve`)
+
+`dsc serve` boots a WebSocket daemon on `127.0.0.1:9090` that exposes
+the full agent loop — tools, MCP, DeepSeek streaming — over a typed
+JSON protocol. Useful for editor plugins, automation, remote frontends,
+or anywhere you want dsc's brain without ink's TUI in the way.
+
+```sh
+dsc serve                  # default port 9090
+DSC_SERVE_PORT=9191 dsc serve
+```
+
+The daemon prints its address + pid to stderr on boot, then waits for
+clients. Each client connection runs against the same daemon-global
+session (multi-client coordination lands in a later 1.x release).
+
+### Protocol
+
+Newline-delimited JSON over WebSocket. The daemon sends a `hello`
+immediately on connect with `protocol_version: 1`. Then:
+
+| Direction | Type | Purpose |
+|---|---|---|
+| → client | `hello` | Sent on connect. Includes protocol version + dsc semver. |
+| → client | `token` | Streaming assistant text delta. |
+| → client | `thinking` | Streaming reasoning tokens (when reasoning is on). |
+| → client | `tool` | Assistant is calling a tool. Carries `name` + `args`. |
+| → client | `tool_result` | Tool finished. Carries `name`, `content`, `rejected`. |
+| → client | `notice` | Informational message (status, error). |
+| → client | `approval_request` | Daemon needs the user to approve a tool. Includes `id`, `title`, `body`. |
+| → client | `turn_end` | Assistant finished generating. |
+| client → | `prompt` | Send a prompt: `{ "type": "prompt", "text": "..." }`. |
+| client → | `approval_response` | Answer: `{ "type": "approval_response", "id": <n>, "answer": "yes"\|"no"\|"always" }`. |
+| client → | `slash` | Run a slash command: `{ "type": "slash", "command": "cost" }`. |
+
+Source: [`src/serve_protocol.ts`](src/serve_protocol.ts).
+
+### Quick try
+
+```sh
+# terminal A
+dsc serve
+
+# terminal B (requires `npm i -g wscat`)
+wscat -c ws://127.0.0.1:9090
+> {"type":"prompt","text":"list files in this repo"}
+```
+
+### Dependencies
+
+The `ws` package is an **optional** runtime dependency — users who never
+run the daemon don't pay for it. If you install with
+`--omit=optional` or `--no-optional`, `dsc serve` will fail with a
+clear "ws not installed" error on launch.
+
+### Status
+
+Phase 1: single-client baseline. Slash command dispatch, server-initiated
+events (background MCP completion, version notices), approval round-trip
+completion, and multi-client coordination are tracked in
+[`docs/headless-serve-plan.md`](docs/headless-serve-plan.md).
+
 ## Sessions and history
 
 Each session is a JSON file under `$XDG_DATA_HOME/dsc/sessions/`
