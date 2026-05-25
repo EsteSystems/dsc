@@ -19,12 +19,21 @@
  * collisions when two servers expose tools with the same name.
  */
 
+import { createWriteStream, mkdirSync } from "node:fs";
+import { homedir } from "node:os";
+import * as path from "node:path";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
 import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js";
 import { confirm } from "./approval.js";
 import { getConfig } from "./api.js";
 import type { ToolSchema } from "./api.js";
+
+function mcpLogPath(serverName: string): string {
+  const xdg = process.env.XDG_STATE_HOME;
+  const base = xdg && xdg.length ? xdg : path.join(homedir(), ".local", "state");
+  return path.join(base, "dsc", `mcp-${serverName}.log`);
+}
 
 type AnyTransport = StreamableHTTPClientTransport | StdioClientTransport;
 
@@ -254,7 +263,36 @@ async function connectOne(
         env[k] = expandEnv(v, `mcp.${name}.env.${k}`);
       }
     }
-    transport = new StdioClientTransport({ command, args, env });
+    // `stderr: "pipe"` is critical: the SDK's default is "inherit", which
+    // forwards child stderr to dsc's terminal. That breaks ink — any byte
+    // hitting the terminal outside ink's render path scrolls the dynamic
+    // frame, and the next ink repaint draws a fresh frame *below* the
+    // displaced one, so the user sees stacked status bars. Routing the
+    // child's stderr through a Readable lets us pipe it to a log file
+    // instead, debug-friendly without polluting the TUI.
+    transport = new StdioClientTransport({
+      command,
+      args,
+      env,
+      stderr: "pipe",
+    });
+
+    const logPath = mcpLogPath(name);
+    try {
+      mkdirSync(path.dirname(logPath), { recursive: true });
+      const logStream = createWriteStream(logPath, { flags: "a" });
+      logStream.write(
+        `\n--- ${new Date().toISOString()} dsc connected mcp.${name} (${command}) ---\n`,
+      );
+      // The SDK's transport.stderr getter returns a PassThrough that
+      // exposes the child's stderr stream after start(). Pipe it through
+      // to the file; the SDK starts the child during client.connect()
+      // below, so the pipe lands before any byte is emitted.
+      transport.stderr?.pipe(logStream);
+    } catch {
+      // Best-effort: if the log file can't be opened (perms, disk full),
+      // we still want the server to come up. Worst case stderr is lost.
+    }
   }
 
   const client = new Client({ name: "dsc", version: "0.5.3" });
