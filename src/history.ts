@@ -14,6 +14,19 @@ import {
 
 export const LEGACY_HISTORY_FILE = ".dsc-history.json";
 
+/** Human-friendly "Ns/Nm/Nh/Nd ago" for a session's updated_at timestamp.
+ *  Used by /list (in the slash dispatcher) to show session recency. */
+export function formatRelative(ts: number): string {
+  const s = Math.max(0, Math.floor((Date.now() - ts) / 1000));
+  if (s < 60) return `${s}s ago`;
+  const m = Math.floor(s / 60);
+  if (m < 60) return `${m}m ago`;
+  const h = Math.floor(m / 60);
+  if (h < 24) return `${h}h ago`;
+  const d = Math.floor(h / 24);
+  return `${d}d ago`;
+}
+
 export function sessionsDir(): string {
   const xdg = process.env.XDG_DATA_HOME;
   const base = xdg && xdg.length ? xdg : path.join(homedir(), ".local", "share");

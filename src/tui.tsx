@@ -13,26 +13,16 @@ import {
   AVAILABLE_MODELS,
   DEFAULT_MODEL,
   DeepSeekError,
-  apiKeySource,
   computeCostUsd,
   configPath,
   consumeConfigMigrationNotice,
   hasApiKey,
   recordUsage,
-  saveApiKey,
-  saveSearchKey,
-  saveSearchProvider,
   type Message,
   type Model,
 } from "./api.js";
-import { getProvider, getProviderKey } from "./search.js";
 import { loadInstructions } from "./instructions.js";
-import {
-  clearPreferences,
-  preferencesPath,
-  readPreferences,
-  savePreferences,
-} from "./preferences.js";
+import { readPreferences } from "./preferences.js";
 import {
   callMCPTool,
   closeAll as closeMCP,
@@ -48,7 +38,6 @@ import type { AgentEvents } from "./agent.js";
 import type { ToolContext } from "./tools.js";
 import * as history from "./history.js";
 import * as approval from "./approval.js";
-import * as audit from "./audit.js";
 import * as replHistory from "./repl_history.js";
 import { promises as fsp } from "node:fs";
 import { homedir } from "node:os";
@@ -56,15 +45,8 @@ import * as path from "node:path";
 import { compactSession } from "./compact.js";
 import { formatVersionInfo } from "./version.js";
 import { openEditor } from "./editor.js";
-import {
-  addLocalBinToShellRc,
-  checkForUpdate,
-  localBinOnPath,
-  runUpdate,
-  setUserNpmPrefix,
-  shellRcPath,
-} from "./update.js";
-import { copyToClipboard } from "./clipboard.js";
+import { checkForUpdate } from "./update.js";
+import { dispatchSlash, type SlashContext } from "./slash_dispatch.js";
 
 // Auto-compact threshold (token-count of estimated context). Default
 // 50K — well below the 1M model limit, but tuned to keep per-turn input
@@ -630,819 +612,82 @@ async function main() {
   // Returns true if the input was a recognized slash command and got handled
   // (or rejected) — caller should not forward it to the agent. Returns false
   // for non-slash input and unknown commands (caller decides what to do).
-  const handleSlash = async (line: string): Promise<boolean> => {
-    if (!line.startsWith("/")) return false;
-    const [cmd, ...rest] = line.slice(1).split(/\s+/);
-    const arg = rest.join(" ");
-
-    switch (cmd) {
-      case "exit":
-      case "quit":
-        clearInterval(timerId);
-        process.exit(0);
-        return true;
-      case "help":
-        info(
-          [
-            "/help                   show this help",
-            "/clear                  start a new session",
-            "/list                   list sessions for this cwd",
-            "/resume [n|name|id]     resume a session",
-            "/save <name>            name the current session",
-            "/rename <text>          set assistant label for this session",
-            "/model [name]           show or switch model",
-            "/yolo                   toggle approval mode",
-            "/reasoning [on|off]     toggle reasoning display",
-            "/lang [name|off]        force the model to reply in a language",
-            "/auto-continue [N|off]  auto-grant N extra MAX_TOOL_DEPTH budgets",
-            "/cost                   show token usage and cost",
-            "/budget [usd|off]       set per-session USD ceiling (warn at 80%, abort at 100%)",
-            "/copy                   copy last assistant response to clipboard",
-            "/version                show version info",
-            "/instructions           list active per-project / per-user instruction overlays",
-            "/mcp                    list connected MCP servers and their tools",
-            "/preferences [reset]    show or clear persisted slash-set settings",
-            "/compact [keep]         summarize old turns (default keep=4)",
-            "/transcript             dump full message log",
-            "/audit [path|show N]    audit log info",
-            "/queue [clear]          list or clear queued prompts",
-            "/export [path]          write current session JSON for transfer",
-            "/import <path>          load session JSON; rebinds cwd here (--keep-cwd to skip)",
-            "/api-key [key]          show source / save api key to config file",
-            "/search [use|key] …     show / switch search provider / save brave|tavily key",
-            "/update                 check npm for a newer dsc and install it",
-            "/edit [text]            open $EDITOR; the saved buffer becomes the next prompt",
-            "/exit                   exit",
-          ].join("\n"),
-        );
-        return true;
-      case "clear":
-        session = history.newSession(cwd, model);
-        messages = session.messages;
-        stats = session.stats;
-        toolCtx.filesTouched = stats.files_touched;
-        toolCtx.sessionId = session.id;
-        // Per-tool always-approval is conversation-scoped, so /clear has
-        // to drop it — otherwise the user would carry over implicit trust
-        // they made to a session they just walked away from.
-        toolCtx.sessionApprovals = new Set();
-        setState({ history: [], current: null });
-        info(`new session started (${session.id})`);
-        syncStatus();
-        return true;
-      case "list": {
-        const all = await history.listSessions(cwd);
-        if (!all.length) {
-          info(`no sessions for ${cwd}`);
-        } else {
-          info(
-            all
-              .map((s, i) => {
-                const here = s.id === session.id ? "* " : "  ";
-                const label = s.name ? `${s.name} (${s.model})` : s.model;
-                return `${here}${String(i + 1).padStart(2, " ")}. ${label}  ${formatRelative(s.updated_at)}  (${s.message_count} msgs)  ${s.first_user_message || "—"}`;
-              })
-              .join("\n"),
-          );
-        }
-        return true;
-      }
-      case "save":
-        if (!arg.trim()) {
-          info("error: usage: /save <name>");
-        } else {
-          session.name = arg.trim();
-          await persist();
-          info(`session saved as "${session.name}" (id ${session.id})`);
-        }
-        return true;
-      case "rename": {
-        const text = arg.trim();
-        if (!text) {
-          info(`assistant label: "${session.assistantLabel ?? "assistant:"}"`);
-        } else if (text === "--reset" || text === "default") {
-          delete session.assistantLabel;
-          setState({ assistantLabel: "assistant:" });
-          await persist();
-          info("assistant label reset to default");
-        } else {
-          session.assistantLabel = text;
-          setState({ assistantLabel: text });
-          await persist();
-          info(`assistant label → "${text}"`);
-        }
-        return true;
-      }
-      case "resume": {
-        const all = await history.listSessions(cwd);
-        if (!all.length) {
-          info("no sessions to resume");
-          return true;
-        }
-        let target: history.SessionMeta | null = null;
-        if (!arg || arg === "last") {
-          target = all[0];
-        } else if (/^\d+$/.test(arg)) {
-          target = all[parseInt(arg, 10) - 1] ?? null;
-          if (!target) info(`error: no session at index ${arg} (have ${all.length})`);
-        } else {
-          target =
-            all.find((s) => s.name === arg) ??
-            all.find((s) => s.id === arg) ??
-            null;
-          if (!target) info(`error: no session with name or id ${arg}`);
-        }
-        if (target) {
-          const loaded = await history.loadSession(target.id);
-          if (!loaded) {
-            info(`error: failed to load session ${target.id}`);
-          } else {
-            session = loaded;
-            messages = session.messages;
-            stats = session.stats;
-            model = session.model;
-            toolCtx.filesTouched = stats.files_touched;
-            toolCtx.sessionId = session.id;
-            const userTurns = messages.filter((m) => m.role === "user").length;
-            // Rebuild history view from the resumed session.
-            const restored: UIMessage[] = [];
-            for (const m of messages) {
-              if (m.role === "system") continue;
-              restored.push({
-                id: `r-${restored.length}`,
-                role: m.role as UIMessage["role"],
-                content: typeof m.content === "string" ? m.content : "",
-                tool_call_id: m.tool_call_id,
-              });
-            }
-            setState({ history: restored, current: null, model });
-            syncStatus();
-            info(`resumed ${session.id} (${userTurns} turns, model ${model})`);
-          }
-        }
-        return true;
-      }
-      case "cost":
-        info(formatCost(stats, model));
-        return true;
-      case "budget": {
-        // /budget                -> show current limit + spend
-        // /budget <usd>          -> set a session ceiling
-        // /budget off            -> clear
-        const text = arg.trim().toLowerCase();
-        if (!text) {
-          const cost = computeCostUsd(stats, model);
-          if (budgetUsd === null) {
-            info(
-              `budget: not set  (spent: $${cost.toFixed(4)})\n/budget <usd> to set a limit, /budget off to clear`,
-            );
-          } else {
-            const pct =
-              budgetUsd > 0 ? Math.round((cost / budgetUsd) * 100) : 0;
-            info(
-              `budget: $${budgetUsd.toFixed(2)}  spent: $${cost.toFixed(4)} (${pct}%)  warned: ${budgetWarned ? "yes" : "no"}`,
-            );
-          }
-          return true;
-        }
-        if (text === "off" || text === "none" || text === "0") {
-          budgetUsd = null;
-          budgetWarned = false;
-          void savePreferences({ budgetUsd: null });
-          info("budget cleared  (saved)");
-          return true;
-        }
-        const n = parseFloat(text);
-        if (!Number.isFinite(n) || n <= 0) {
-          info("error: usage: /budget <amount-usd> | off");
-          return true;
-        }
-        budgetUsd = n;
-        // Reset the warning flag so the user gets a fresh 80% notice
-        // against the new limit even if they're already over it.
-        budgetWarned = false;
-        void savePreferences({ budgetUsd: n });
-        info(
-          `budget: $${n.toFixed(2)} (warn at 80%, abort the next turn at 100%)  (saved)`,
-        );
-        return true;
-      }
-      case "copy": {
-        // Copy the most recent assistant response to the OS clipboard. The
-        // last *assistant* (not tool, not system, not user) is what the
-        // user usually wants — the actual answer text.
-        const state = getState();
-        let target: UIMessage | undefined;
-        for (let i = state.history.length - 1; i >= 0; i--) {
-          const m = state.history[i];
-          if (m.role === "assistant" && m.content) {
-            target = m;
-            break;
-          }
-        }
-        if (!target) {
-          info("no assistant message to copy");
-          return true;
-        }
-        try {
-          await copyToClipboard(target.content);
-          info(`copied ${target.content.length} chars to clipboard`);
-        } catch (e) {
-          info(`error: ${(e as Error).message}`);
-        }
-        return true;
-      }
-      case "model":
-        if (!arg) {
-          info(`current model: ${model}`);
-        } else if (!AVAILABLE_MODELS.includes(arg as Model)) {
-          info(`error: unknown model: ${arg} (available: ${AVAILABLE_MODELS.join(", ")})`);
-        } else {
-          model = arg as Model;
-          syncStatus();
-          info(`model → ${model}`);
-          await persist();
-        }
-        return true;
-      case "yolo":
-        toolCtx.yolo = !toolCtx.yolo;
-        setState({ yolo: toolCtx.yolo });
-        // Persist so the next launch starts the same way. Saving `false`
-        // explicitly (rather than deleting the key) means a user who
-        // *turned* yolo off doesn't get re-prompted next time if we ever
-        // add a "default-on" path; today both are equivalent.
-        void savePreferences({ yolo: toolCtx.yolo });
-        info(`yolo: ${toolCtx.yolo}  (saved to ${preferencesPath()})`);
-        return true;
-      case "reasoning": {
-        const cur = getState().reasoning;
-        const next = arg === "on" ? true : arg === "off" ? false : !cur;
-        setState({ reasoning: next });
-        void savePreferences({ reasoning: next });
-        info(`reasoning: ${next ? "on" : "off"}  (saved)`);
-        return true;
-      }
-      case "queue": {
-        const sub = arg.trim().toLowerCase();
-        if (sub === "clear" || sub === "drop") {
-          const n = promptQueue.length;
-          promptQueue.length = 0;
-          syncStatus();
-          info(`cleared ${n} queued prompt(s)`);
-        } else if (promptQueue.length === 0) {
-          info("queue is empty");
-        } else {
-          info(
-            promptQueue
-              .map((p, i) => `${String(i + 1).padStart(2, " ")}. ${p}`)
-              .join("\n"),
-          );
-        }
-        return true;
-      }
-      case "lang": {
-        const text = arg.trim();
-        if (!text) {
-          info(
-            `language: ${session.language ? `"${session.language}"` : "off (any language)"}`,
-          );
-        } else if (text === "off" || text === "default" || text === "any") {
-          delete session.language;
-          setState({ language: undefined });
-          await persist();
-          info("language directive cleared");
-        } else {
-          session.language = text;
-          setState({ language: text });
-          await persist();
-          info(
-            `language → "${text}" (replies will be exclusively in this language)`,
-          );
-        }
-        return true;
-      }
-      case "auto-continue": {
-        const t = arg.trim();
-        if (!t) {
-          const n = getState().autoContinue;
-          info(`auto-continue: ${n === 0 ? "off" : `up to ${n} extra budget(s)`}`);
-        } else if (t === "off" || t === "0" || t === "false") {
-          setState({ autoContinue: 0 });
-          // Saved as 0 (or absent) — clear via savePreferences with null
-          // so the key is removed from the file when value is "off".
-          void savePreferences({ autoContinue: null });
-          info("auto-continue: off  (saved)");
-        } else {
-          const n = parseInt(t, 10);
-          if (!Number.isFinite(n) || n < 0) {
-            info("error: usage: /auto-continue [N|off]");
-          } else {
-            setState({ autoContinue: n });
-            void savePreferences({ autoContinue: n });
-            info(
-              `auto-continue: ${n === 0 ? "off" : `up to ${n} extra budget(s)`}  (saved)`,
-            );
-          }
-        }
-        return true;
-      }
-      case "version":
-        info(formatVersionInfo());
-        return true;
-      case "preferences": {
-        const sub = arg.trim().toLowerCase();
-        if (sub === "reset") {
-          await clearPreferences();
-          info(
-            `preferences file deleted (${preferencesPath()}). Current session keeps its in-memory settings; next launch starts with defaults.`,
-          );
-          return true;
-        }
-        if (sub && sub !== "show") {
-          info("error: usage: /preferences [show|reset]");
-          return true;
-        }
-        const saved = await readPreferences();
-        const lines: string[] = [`preferences: ${preferencesPath()}`];
-        const keys: (keyof typeof saved)[] = [
-          "yolo",
-          "reasoning",
-          "autoContinue",
-          "budgetUsd",
-        ];
-        const present = keys.filter((k) => saved[k] !== undefined);
-        if (present.length === 0) {
-          lines.push("  (no preferences saved; defaults apply)");
-        } else {
-          for (const k of present) {
-            lines.push(`  ${k}: ${JSON.stringify(saved[k])}`);
-          }
-        }
-        info(lines.join("\n"));
-        return true;
-      }
-      case "mcp": {
-        // Status / inspection only for now — connections are established
-        // at boot. Future: subcommands for reconnect, disable, etc.
-        if (mcpConnections.length === 0) {
-          info(
-            [
-              "No MCP servers connected.",
-              "",
-              "To wire one in, add an `mcp.servers` block to your config:",
-              `  ${configPath()}`,
-              "",
-              "Example (Tavily remote MCP):",
-              '  "mcp": {',
-              '    "servers": {',
-              '      "tavily": {',
-              '        "url": "https://mcp.tavily.com/mcp/",',
-              '        "headers": { "Authorization": "Bearer ${TAVILY_API_KEY}" }',
-              "      }",
-              "    }",
-              "  }",
-              "",
-              "Restart dsc after editing — connections are made at boot.",
-            ].join("\n"),
-          );
-          return true;
-        }
-        const lines: string[] = [];
-        for (const c of mcpConnections) {
-          lines.push(`── ${c.name} ──`);
-          for (const t of c.tools) {
-            // t.function.name is namespaced (mcp_<server>_<tool>); strip
-            // the prefix for readability.
-            const short = t.function.name.replace(/^mcp_[^_]+_/, "");
-            lines.push(`  ${short}: ${t.function.description ?? ""}`);
-          }
-        }
-        info(lines.join("\n"));
-        return true;
-      }
-      case "instructions": {
-        // Show every overlay the agent currently sees, in the order they
-        // appear in the system prompt. Resolved fresh per call so edits
-        // since launch are reflected without restarting dsc.
-        const overlays = loadInstructions(cwd);
-        if (overlays.length === 0) {
-          info(
-            [
-              "No instruction overlays found. dsc looks for:",
-              "  ~/.config/dsc/instructions.md  (user-global)",
-              "  AGENTS.md                      (project, walked up from cwd)",
-              "  .dsc/instructions.md           (project, dsc-specific)",
-              "Create any of these to teach the agent project conventions.",
-            ].join("\n"),
-          );
-          return true;
-        }
-        const sections = overlays.map((ov) => {
-          const label =
-            ov.kind === "user"
-              ? "user"
-              : ov.kind === "agents"
-                ? "AGENTS.md"
-                : ".dsc/instructions.md";
-          const lines = ov.content.split("\n");
-          const head = lines.slice(0, 20);
-          const tail =
-            lines.length > 20
-              ? `\n… (${lines.length - 20} more lines)`
-              : "";
-          return `── ${label} @ ${ov.path} ──\n${head.join("\n")}${tail}`;
-        });
-        info(sections.join("\n\n"));
-        return true;
-      }
-      case "update": {
-        // Two-phase: check first so we don't run npm install when we're
-        // already current. Force-fetches the latest (ignores the 24h cache
-        // because the user explicitly asked) and reports either way.
-        info("checking npm for a newer version…");
-        try {
-          const check = await checkForUpdate({ force: true });
-          if (!check.newerAvailable) {
-            info(`up to date (${check.current})`);
-            return true;
-          }
-          info(
-            `installing ${check.latest} (currently ${check.current}) via npm…`,
-          );
-          let r = await runUpdate();
-          // ETARGET = npm's registry has the new version's metadata but
-          // the tarball hasn't propagated to all CDN edges yet (common
-          // for the first minute or two after `npm publish`). Wait
-          // briefly and retry once before surfacing as a failure.
-          if (!r.ok && /ETARGET/i.test(r.output)) {
-            info("tarball not on all CDN edges yet (ETARGET); retrying in 8s…");
-            await new Promise((res) => setTimeout(res, 8000));
-            r = await runUpdate();
-          }
-          // Auto-recover from EACCES on Linux/macOS: offer to set
-          // npm's prefix under ~/.local so the install doesn't need
-          // sudo, optionally append the PATH export to the user's
-          // shell rc, then retry. The user approves each step.
-          const isPermError = /EACCES|EPERM|permission/.test(r.output);
-          if (
-            !r.ok &&
-            isPermError &&
-            process.platform !== "win32"
-          ) {
-            const ans = await approval.confirm({
-              title: "Permission error installing dsc",
-              body:
-                `npm install -g hit a permission error (likely because npm's prefix is system-owned).` +
-                `\n\nDurable fix: set npm's global prefix to ~/.local. After this, all` +
-                `\n\`npm install -g\` and \`/update\` runs work without sudo.` +
-                `\n\nDsc will:` +
-                `\n  1. mkdir -p ~/.local/{bin,lib}` +
-                `\n  2. npm config set prefix ~/.local` +
-                `\n  3. retry the install`,
-              question: "Configure user prefix and retry? [y]es / [n]o (Esc rejects) ",
-            });
-            if (ans !== "no") {
-              try {
-                const dir = await setUserNpmPrefix();
-                info(`set npm prefix to ${dir}; retrying install…`);
-                r = await runUpdate();
-                if (r.ok && !localBinOnPath()) {
-                  const rc = shellRcPath();
-                  if (rc) {
-                    const pathAns = await approval.confirm({
-                      title: "Add ~/.local/bin to PATH",
-                      body:
-                        `dsc now lives at ~/.local/bin/dsc but that directory isn't on your PATH.` +
-                        `\n\nDsc can append the export line to:` +
-                        `\n  ${rc}` +
-                        `\n\nYou'll need to open a new terminal (or \`source\` the file) for it to take effect.`,
-                      question: `Append PATH export to ${rc}? [y]es / [n]o (Esc rejects) `,
-                    });
-                    if (pathAns !== "no") {
-                      try {
-                        const edited = await addLocalBinToShellRc();
-                        if (edited) {
-                          info(
-                            `appended PATH export to ${edited}. Open a new terminal or run:` +
-                              `\n  source ${edited}`,
-                          );
-                        } else {
-                          info(`(${rc} already has ~/.local/bin in PATH; no edit needed)`);
-                        }
-                      } catch (e) {
-                        info(`error appending to ${rc}: ${(e as Error).message}`);
-                      }
-                    } else {
-                      info(
-                        `Add this line to your shell rc manually:\n  export PATH="$HOME/.local/bin:$PATH"`,
-                      );
-                    }
-                  } else {
-                    info(
-                      `Couldn't autodetect your shell rc. Add this line manually:` +
-                        `\n  export PATH="$HOME/.local/bin:$PATH"`,
-                    );
-                  }
-                }
-              } catch (e) {
-                info(`error: prefix setup failed: ${(e as Error).message}`);
-              }
-            }
-          }
-          if (!r.ok) {
-            // Either non-permission failure, or the user declined the
-            // auto-recovery, or the retry itself failed. Surface npm's
-            // own output verbatim — it usually points at the cause.
-            const tail =
-              isPermError && process.platform !== "win32"
-                ? `\n\nQuick one-off if you'd rather: sudo npm install -g @este.systems/dsc@latest`
-                : "";
-            info(`error: update failed\n${r.output.slice(-1500)}${tail}`);
-            return true;
-          }
-          info(
-            `installed ${check.latest}. Exit and re-run \`dsc\` to pick up the new version.`,
-          );
-        } catch (e) {
-          info(`error: update failed: ${(e as Error).message}`);
-        }
-        return true;
-      }
-      case "api-key": {
-        const text = arg.trim();
-        if (!text) {
-          // No arg: show where the key is configured (don't print the key
-          // itself; that's not the kind of thing /command output should
-          // splash to scrollback).
-          const src = apiKeySource();
-          if (src === "env") {
-            info("api key: set via $DEEPSEEK_API_KEY (env)");
-          } else if (src === "file") {
-            info(`api key: stored in ${configPath()}`);
-          } else {
-            info(
-              `api key: not set\nGet one at https://platform.deepseek.com/api_keys, then run /api-key <key> (or export DEEPSEEK_API_KEY in your shell).`,
-            );
-          }
-          return true;
-        }
-        try {
-          const written = await saveApiKey(text);
-          info(`api key saved to ${written}`);
-        } catch (e) {
-          info(`error: ${(e as Error).message}`);
-        }
-        return true;
-      }
-      case "search": {
-        // /search                          -> full status
-        // /search use <provider>           -> set active provider in config
-        // /search key <provider>           -> show that provider's status + URL
-        // /search key <provider> <key>     -> save it to config
-        const SIGNUP: Record<"brave" | "tavily", string> = {
-          brave: "https://api-dashboard.search.brave.com/app/keys",
-          tavily: "https://app.tavily.com/",
-        };
-        const ENV_KEY: Record<"brave" | "tavily", string> = {
-          brave: "BRAVE_API_KEY",
-          tavily: "TAVILY_API_KEY",
-        };
-        const keySourceFor = (p: "brave" | "tavily"): "env" | "file" | null => {
-          if (process.env[ENV_KEY[p]]) return "env";
-          return getProviderKey(p) ? "file" : null;
-        };
-        const keyStatusLine = (p: "brave" | "tavily"): string => {
-          const src = keySourceFor(p);
-          const status =
-            src === "env"
-              ? `set via $${ENV_KEY[p]}`
-              : src === "file"
-                ? "stored in config"
-                : "not set";
-          return `  ${p}: ${status}  —  ${SIGNUP[p]}`;
-        };
-
-        const tokens = arg.trim().split(/\s+/).filter(Boolean);
-        const sub = tokens[0];
-
-        // No subcommand: full status.
-        if (!sub) {
-          const active = getProvider();
-          const activeSrc = process.env.DSC_SEARCH_PROVIDER
-            ? "set via $DSC_SEARCH_PROVIDER"
-            : "from config";
-          info(
-            [
-              `active provider: ${active}  (${activeSrc})`,
-              "",
-              "keys:",
-              keyStatusLine("brave"),
-              keyStatusLine("tavily"),
-              "  ddg: no key needed (DuckDuckGo HTML scrape)",
-              "",
-              "Subcommands:",
-              "  /search use <brave|tavily|ddg>      switch active provider",
-              "  /search key <provider> [key]        show or save api key",
-            ].join("\n"),
-          );
-          return true;
-        }
-
-        if (sub === "use") {
-          const name = tokens[1];
-          if (!name || (name !== "brave" && name !== "tavily" && name !== "ddg")) {
-            info("error: usage: /search use <brave|tavily|ddg>");
-            return true;
-          }
-          try {
-            const written = await saveSearchProvider(name);
-            // Warn the user if they just selected a provider whose key
-            // isn't configured — they'll otherwise hit a 401 on the next
-            // web_search and wonder why.
-            const needsKey = name === "brave" || name === "tavily";
-            const haveKey = needsKey ? !!keySourceFor(name) : true;
-            const warn = needsKey && !haveKey
-              ? `\n(warning) ${name} has no key set. Run: /search key ${name} <key>`
-              : "";
-            info(`active search provider → ${name}  (saved to ${written})${warn}`);
-          } catch (e) {
-            info(`error: ${(e as Error).message}`);
-          }
-          return true;
-        }
-
-        if (sub === "key") {
-          const name = tokens[1];
-          const keyValue = tokens.slice(2).join(" ");
-          if (!name || (name !== "brave" && name !== "tavily")) {
-            info("error: usage: /search key <brave|tavily> [key]");
-            return true;
-          }
-          if (!keyValue) {
-            info(
-              `${name}: ${keySourceFor(name) ?? "not set"}\nsignup: ${SIGNUP[name]}`,
-            );
-            return true;
-          }
-          try {
-            const written = await saveSearchKey(name, keyValue);
-            info(`${name} key saved to ${written}`);
-          } catch (e) {
-            info(`error: ${(e as Error).message}`);
-          }
-          return true;
-        }
-
-        info(
-          `error: unknown subcommand '${sub}' (expected: use | key, or no arg for status)`,
-        );
-        return true;
-      }
-      case "audit": {
-        const sub = arg.trim();
-        if (!sub || sub === "path") {
-          info(audit.auditLogPath());
-        } else if (sub.startsWith("show")) {
-          const nRaw = sub.replace(/^show\s*/, "").trim();
-          const limit = (() => {
-            const n = nRaw ? parseInt(nRaw, 10) : NaN;
-            return Number.isFinite(n) && n > 0 ? n : 10;
-          })();
-          try {
-            const text = await fsp.readFile(audit.auditLogPath(), "utf8");
-            const lines = text.split("\n").filter((l) => l.length > 0).slice(-limit);
-            info(lines.length ? lines.join("\n") : "(empty)");
-          } catch {
-            info("(no audit log yet)");
-          }
-        } else {
-          info("error: usage: /audit | /audit path | /audit show [N]");
-        }
-        return true;
-      }
-      case "transcript": {
-        const archived = session.archivedMessages ?? [];
-        if (archived.length === 0 && messages.length === 0) {
-          info("(no messages)");
-          return true;
-        }
-        const lines: string[] = [];
-        const renderMsg = (m: Message, isArchived: boolean) => {
-          const tag = isArchived ? "archived " : "";
-          lines.push(`\n${tag}${m.role}`);
-          if (m.tool_calls && m.tool_calls.length) {
-            for (const tc of m.tool_calls) {
-              lines.push(`  → ${tc.function.name}(${truncate(tc.function.arguments, 200)})`);
-            }
-          }
-          if (m.tool_call_id) lines.push(`  ← tool_call_id: ${m.tool_call_id}`);
-          if (typeof m.content === "string" && m.content) lines.push(m.content);
-        };
-        if (archived.length) {
-          lines.push(`── archived (${archived.length} messages)`);
-          for (const m of archived) renderMsg(m, true);
-        }
-        if (messages.length) {
-          lines.push(`── active (${messages.length} messages)`);
-          for (const m of messages) renderMsg(m, false);
-        }
-        info(lines.join("\n"));
-        return true;
-      }
-      case "compact": {
-        const keepRaw = arg ? parseInt(arg, 10) : NaN;
-        const keep = Number.isFinite(keepRaw) ? Math.max(0, keepRaw) : 4;
-        await runCompaction(keep, false);
-        return true;
-      }
-      case "export": {
-        // `/export [path]` — writes the current session JSON. Relative
-        // paths resolve against the launch cwd, not against the session's
-        // recorded cwd, so it lands where the user actually is. Default
-        // target is the cwd, named after /save'd name (or id) and date.
-        const dest = arg.trim() || ".";
-        const absDest = path.isAbsolute(dest) ? dest : path.resolve(cwd, dest);
-        try {
-          await persist(); // flush any pending writes before export
-          const written = await history.exportSession(session.id, absDest);
-          info(`exported to ${written}`);
-        } catch (e) {
-          info(`error: export failed: ${(e as Error).message}`);
-        }
-        return true;
-      }
-      case "import": {
-        // `/import <path>` — reads a session JSON, rebinds its cwd to the
-        // current directory so auto-resume picks it up here, and loads it
-        // as the active session immediately. Keep the previous cwd with
-        // `--keep-cwd` (positional flag, kept simple).
-        const tokens = arg.trim().split(/\s+/).filter(Boolean);
-        const keepCwd = tokens.includes("--keep-cwd");
-        const file = tokens.find((t) => !t.startsWith("--"));
-        if (!file) {
-          info("error: usage: /import <path> [--keep-cwd]");
-          return true;
-        }
-        const absFile = path.isAbsolute(file) ? file : path.resolve(cwd, file);
-        try {
-          const loaded = await history.importSession(absFile, {
-            rebindCwd: keepCwd ? undefined : cwd,
+  // Slash-command dispatch lives in src/slash_dispatch.ts now (shared with
+  // `dsc serve`). We wire the dispatcher's SlashContext to this front-end's
+  // imperative locals: getters read the (reassignable) session state, actions
+  // mutate it + drive ink. `emit` is the `info()` system-line sink.
+  const slashContext: SlashContext = {
+    cwd,
+    emit: info,
+    getModel: () => model,
+    getStats: () => stats,
+    getSession: () => session,
+    getMessages: () => messages,
+    getToolCtx: () => toolCtx,
+    getQueue: () => promptQueue,
+    getBudget: () => ({ usd: budgetUsd, warned: budgetWarned }),
+    getMcpConnections: () => mcpConnections,
+    setModel: (m) => {
+      model = m;
+    },
+    setBudget: (usd, warned) => {
+      budgetUsd = usd;
+      budgetWarned = warned;
+    },
+    persist,
+    syncStatus,
+    compact: runCompaction,
+    submit: (text) => handleSubmit(text),
+    applySession: (next, opts) => {
+      session = next;
+      messages = next.messages;
+      stats = next.stats;
+      model = next.model;
+      toolCtx.filesTouched = stats.files_touched;
+      toolCtx.sessionId = next.id;
+      // Per-tool always-approval is conversation-scoped, so /clear drops it —
+      // otherwise the user carries implicit trust into a session they walked
+      // away from.
+      if (opts.resetApprovals) toolCtx.sessionApprovals = new Set();
+      if (opts.rebuildView) {
+        // Rebuild the visible history from the (resumed/imported) session.
+        const restored: UIMessage[] = [];
+        for (const m of messages) {
+          if (m.role === "system") continue;
+          restored.push({
+            id: `r-${restored.length}`,
+            role: m.role as UIMessage["role"],
+            content: typeof m.content === "string" ? m.content : "",
+            tool_call_id: m.tool_call_id,
           });
-          session = loaded;
-          messages = session.messages;
-          stats = session.stats;
-          model = session.model;
-          toolCtx.filesTouched = stats.files_touched;
-          toolCtx.sessionId = session.id;
-          // Refill the visible history so the user sees the imported
-          // conversation right away (same logic the /resume path uses).
-          const restored: UIMessage[] = [];
-          for (const m of messages) {
-            if (m.role === "system") continue;
-            restored.push({
-              id: `r-${restored.length}`,
-              role: m.role as UIMessage["role"],
-              content: typeof m.content === "string" ? m.content : "",
-              tool_call_id: m.tool_call_id,
-            });
-          }
-          setState({ history: restored, current: null, model });
-          syncStatus();
-          const userTurns = messages.filter((m) => m.role === "user").length;
-          const cwdNote = keepCwd ? "" : " (cwd rebound to here)";
-          info(
-            `imported ${session.id} (${userTurns} turns, model ${model})${cwdNote}`,
-          );
-        } catch (e) {
-          info(`error: import failed: ${(e as Error).message}`);
         }
-        return true;
+        setState({ history: restored, current: null, model });
+      } else {
+        setState({ history: [], current: null, model });
       }
-      case "edit": {
-        // ink owns the terminal — unmount before spawning $EDITOR so the
-        // editor gets a clean screen. We also clear `history` before the
-        // unmount, otherwise the freshly-rendered <Static> after remount
-        // would emit all prior turns to scrollback a second time. The
-        // already-printed scrollback above stays untouched.
-        const initial = arg ? arg + "\n" : "";
-        setState({ history: [] });
-        inkInstance?.unmount();
-        const draft = openEditor(initial);
-        mountApp();
-        if (draft === null) {
-          info("error: editor failed");
-        } else if (!draft.trim()) {
-          info("(empty draft, not sent)");
-        } else {
-          handleSubmit(draft);
-        }
-        return true;
-      }
-      default:
-        info(`error: unknown command: /${cmd}`);
-        return true;
-    }
+      syncStatus();
+    },
+    runEditor: (initial) => {
+      // ink owns the terminal — unmount before spawning $EDITOR so the editor
+      // gets a clean screen. Clear `history` first so the post-remount
+      // <Static> doesn't re-emit prior turns to scrollback. Already-printed
+      // scrollback above stays untouched.
+      setState({ history: [] });
+      inkInstance?.unmount();
+      const draft = openEditor(initial);
+      mountApp();
+      return draft;
+    },
+    exit: () => {
+      clearInterval(timerId);
+      process.exit(0);
+    },
   };
+
+  // Returns true if the input was a recognized slash command and got handled
+  // (or rejected) — caller should not forward it to the agent. Returns false
+  // for non-slash input and unknown commands (caller decides what to do).
+  const handleSlash = (line: string): Promise<boolean> => dispatchSlash(line, slashContext);
 
   const handleSubmit = (text: string) => {
     // Persist every submitted line — slash commands included, since
@@ -1705,17 +950,6 @@ function formatTaskLabel(name: string, argsJson: string): string {
   }
   if (!primary) return name;
   return `${name}: ${truncate(primary, 60)}`;
-}
-
-function formatRelative(ts: number): string {
-  const s = Math.max(0, Math.floor((Date.now() - ts) / 1000));
-  if (s < 60) return `${s}s ago`;
-  const m = Math.floor(s / 60);
-  if (m < 60) return `${m}m ago`;
-  const h = Math.floor(m / 60);
-  if (h < 24) return `${h}h ago`;
-  const d = Math.floor(h / 24);
-  return `${d}d ago`;
 }
 
 main().catch((e) => {
