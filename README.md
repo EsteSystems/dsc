@@ -438,6 +438,7 @@ the archived messages from `/transcript`.
 | Tool | Approval | Notes |
 |---|---|---|
 | `read_file(path, offset?, limit?)` | none | 2000 lines default; long lines truncated. |
+| `list_dir(path?)` | none | Non-recursive directory listing (dirs first, `/` suffix; symlinks `@`; dotfiles included). Defaults to cwd. No approval, cross-platform — prefer over `bash ls`/`dir`. |
 | `grep(pattern, path?, glob?, case_insensitive?)` | none | ripgrep when available, `grep -rn` fallback. |
 | `glob(pattern, path?)` | none | Node 22+ `fs.glob`, capped at 500. |
 | `web_search(query, count?, freshness?)` | none | Pluggable backends (Brave / Tavily / DuckDuckGo). |

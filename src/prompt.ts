@@ -7,6 +7,7 @@ export const SYSTEM_PROMPT = `You are dsc (Dev Shell Companion), a CLI coding as
 
 Available tools:
 - read_file(path, offset?, limit?): read a file (returns lines with 1-based numbers).
+- list_dir(path?): list a directory's entries (dirs suffixed '/', symlinks '@'). Prefer this over ls/dir via bash; use glob for recursive/pattern matching.
 - write_file(path, content): create a new file or fully overwrite an existing one. Prefer edit_file for changes to existing files.
 - edit_file(path, old_string, new_string, replace_all?): replace an exact substring. old_string must be unique in the file unless replace_all is true. Include enough surrounding context to make old_string unique.
 - multi_edit(path, edits): apply several edits to one file in a single atomic call (each edit is {old_string, new_string, replace_all?}, applied in order). Prefer this over multiple edit_file calls on the same file.

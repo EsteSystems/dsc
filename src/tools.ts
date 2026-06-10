@@ -15,6 +15,7 @@ import { getState, setState, type AgentTask } from "./store.js";
 
 export const READ_ONLY_TOOLS = new Set([
   "read_file",
+  "list_dir",
   "grep",
   "glob",
   "web_search",
@@ -40,6 +41,21 @@ export const TOOL_SCHEMAS: ToolSchema[] = [
           limit: { type: "integer", description: "Maximum number of lines to return." },
         },
         required: ["path"],
+      },
+    },
+  },
+  {
+    type: "function",
+    function: {
+      name: "list_dir",
+      description:
+        "List the entries of a directory (non-recursive). Directories are suffixed with '/' and symlinks with '@'. Prefer this over `bash ls`/`dir` — it needs no approval and works the same on every OS. Use glob for recursive/pattern matching.",
+      parameters: {
+        type: "object",
+        properties: {
+          path: { type: "string", description: "Directory path. Defaults to the current directory." },
+        },
+        required: [],
       },
     },
   },
@@ -366,6 +382,9 @@ export async function executeTool(
     case "read_file":
       result = await readFile(args, ctx);
       break;
+    case "list_dir":
+      result = await listDir(args, ctx);
+      break;
     case "write_file":
       result = await writeFile(args, ctx);
       break;
@@ -439,8 +458,8 @@ async function readFile(args: Record<string, unknown>, ctx: ToolContext): Promis
     return {
       content:
         `error: '${abs}' is a directory, not a file. ` +
-        `Use the glob tool to list it: glob({"pattern": "*", "path": "${abs}"}) ` +
-        `for top-level entries, or "**/*" for everything recursively.`,
+        `Use list_dir to see its entries, or glob for recursive/pattern matching ` +
+        `(e.g. glob({"pattern": "**/*", "path": "${abs}"})).`,
       audit: { path: abs, error: "is_directory" },
     };
   }
@@ -468,6 +487,51 @@ async function readFile(args: Record<string, unknown>, ctx: ToolContext): Promis
     content: body,
     audit: { path: abs, lines_returned: end - start, total_lines: totalLines },
   };
+}
+
+const LIST_DIR_LIMIT = 1000;
+
+async function listDir(args: Record<string, unknown>, ctx: ToolContext): Promise<ToolResult> {
+  const p = args.path ? String(args.path) : ".";
+  const abs = resolvePath(ctx, p);
+  let stat;
+  try {
+    stat = await fs.stat(abs);
+  } catch {
+    return { content: `error: directory does not exist: ${abs}`, audit: { path: abs, error: "missing" } };
+  }
+  if (!stat.isDirectory()) {
+    return {
+      content: `error: '${abs}' is a file, not a directory. Use read_file to read it.`,
+      audit: { path: abs, error: "not_a_directory" },
+    };
+  }
+  let entries;
+  try {
+    entries = await fs.readdir(abs, { withFileTypes: true });
+  } catch (e) {
+    return { content: `error: ${(e as Error).message}`, audit: { path: abs, error: "read_failed" } };
+  }
+  // Directories first, then files, each group sorted; symlinks marked '@',
+  // directories suffixed '/'. Dotfiles included — agents need .gitignore etc.
+  const dirs: string[] = [];
+  const files: string[] = [];
+  for (const e of entries) {
+    const mark = e.isSymbolicLink() ? "@" : e.isDirectory() ? "/" : "";
+    (e.isDirectory() ? dirs : files).push(e.name + mark);
+  }
+  dirs.sort();
+  files.sort();
+  const all = [...dirs, ...files];
+  if (all.length === 0) {
+    return { content: "(empty directory)", audit: { path: abs, entries: 0 } };
+  }
+  const shown = all.slice(0, LIST_DIR_LIMIT);
+  let body = shown.join("\n");
+  if (all.length > LIST_DIR_LIMIT) {
+    body += `\n…(${all.length - LIST_DIR_LIMIT} more; ${all.length} total — use glob to narrow)`;
+  }
+  return { content: body, audit: { path: abs, entries: all.length } };
 }
 
 async function writeFile(args: Record<string, unknown>, ctx: ToolContext): Promise<ToolResult> {

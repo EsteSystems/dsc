@@ -113,6 +113,62 @@ describe("read_file", () => {
 });
 
 // ---------------------------------------------------------------------------
+// list_dir
+// ---------------------------------------------------------------------------
+
+describe("list_dir", () => {
+  it("lists entries with dirs first and a trailing slash", async () => {
+    const dir = path.join(TMP, `ls-${counter++}`);
+    fs.mkdirSync(dir);
+    fs.mkdirSync(path.join(dir, "sub"));
+    fs.writeFileSync(path.join(dir, "a.txt"), "");
+    fs.writeFileSync(path.join(dir, "b.txt"), "");
+    const r = await executeTool("list_dir", j({ path: dir }), ctx());
+    assert.equal(r.content, "sub/\na.txt\nb.txt");
+  });
+
+  it("includes dotfiles", async () => {
+    const dir = path.join(TMP, `ls-${counter++}`);
+    fs.mkdirSync(dir);
+    fs.writeFileSync(path.join(dir, ".gitignore"), "");
+    const r = await executeTool("list_dir", j({ path: dir }), ctx());
+    assert.match(r.content, /\.gitignore/);
+  });
+
+  it("defaults to the context cwd when no path is given", async () => {
+    const dir = path.join(TMP, `ls-${counter++}`);
+    fs.mkdirSync(dir);
+    fs.writeFileSync(path.join(dir, "here.txt"), "");
+    const r = await executeTool("list_dir", j({}), ctx({ cwd: dir }));
+    assert.equal(r.content, "here.txt");
+  });
+
+  it("reports an empty directory", async () => {
+    const dir = path.join(TMP, `ls-${counter++}`);
+    fs.mkdirSync(dir);
+    const r = await executeTool("list_dir", j({ path: dir }), ctx());
+    assert.match(r.content, /empty directory/);
+  });
+
+  it("errors on a nonexistent directory", async () => {
+    const r = await executeTool("list_dir", j({ path: tmpFile("no-such-dir") }), ctx());
+    assert.match(r.content, /directory does not exist/);
+  });
+
+  it("points at read_file when handed a file", async () => {
+    const f = tmpFile("notdir.txt");
+    fs.writeFileSync(f, "x");
+    const r = await executeTool("list_dir", j({ path: f }), ctx());
+    assert.match(r.content, /is a file, not a directory/);
+    assert.match(r.content, /read_file/);
+  });
+
+  it("never prompts for approval (read-only)", () => {
+    assert.ok(READ_ONLY_TOOLS.has("list_dir"));
+  });
+});
+
+// ---------------------------------------------------------------------------
 // write_file
 // ---------------------------------------------------------------------------
 
@@ -574,7 +630,7 @@ describe("task tools", () => {
 
 describe("tool surface", () => {
   it("READ_ONLY_TOOLS contains the no-approval tools and not the gated ones", () => {
-    for (const t of ["read_file", "grep", "glob", "web_search", "task_create", "task_list"]) {
+    for (const t of ["read_file", "list_dir", "grep", "glob", "web_search", "task_create", "task_list"]) {
       assert.ok(READ_ONLY_TOOLS.has(t), `${t} should be read-only`);
     }
     for (const t of ["write_file", "edit_file", "multi_edit", "bash", "web_fetch"]) {
@@ -596,7 +652,7 @@ describe("tool surface", () => {
   it("advertises the documented built-in tools", () => {
     const names = new Set(TOOL_SCHEMAS.map((s) => s.function.name));
     for (const t of [
-      "read_file", "write_file", "edit_file", "multi_edit", "bash", "grep", "glob",
+      "read_file", "list_dir", "write_file", "edit_file", "multi_edit", "bash", "grep", "glob",
       "web_fetch", "web_search", "task_create", "task_update", "task_list",
     ]) {
       assert.ok(names.has(t), `schema should advertise ${t}`);
