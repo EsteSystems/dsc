@@ -10,13 +10,14 @@ import { App } from "./tui/App.js";
 import { getState, setState } from "./store.js";
 import type { UIMessage } from "./store.js";
 import {
-  AVAILABLE_MODELS,
+  availableModels,
   DEFAULT_MODEL,
   DeepSeekError,
   computeCostUsd,
   configPath,
   consumeConfigMigrationNotice,
   hasApiKey,
+  isKnownModel,
   recordUsage,
   type Message,
   type Model,
@@ -99,12 +100,12 @@ function parseArgs(argv: string[]): CliParse {
       out.resume = true;
     } else if (a === "--model" || a === "-m") {
       const v = argv[++i];
-      if (!AVAILABLE_MODELS.includes(v as Model)) {
+      if (!isKnownModel(v)) {
         throw new CliError(
-          `unknown model: ${v} (available: ${AVAILABLE_MODELS.join(", ")})`,
+          `unknown model: ${v} (available: ${availableModels().join(", ")})`,
         );
       }
-      out.model = v as Model;
+      out.model = v;
       out.modelExplicit = true;
     } else if (a.startsWith("-")) {
       throw new CliError(`unknown flag: ${a}`);
@@ -141,7 +142,7 @@ async function main() {
         "  dsc serve [--port <n>]         Headless WebSocket daemon (default 127.0.0.1:9090)",
         "",
         "Flags:",
-        "  -m, --model <name>             " + AVAILABLE_MODELS.join(" | "),
+        "  -m, --model <name>             " + availableModels().join(" | "),
         "  -y, --yolo                     Skip approval prompts",
         "      --no-resume                Don't auto-resume the latest session",
         "      --resume [id]              Resume the most recent (or by id)",

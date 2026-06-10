@@ -1,6 +1,10 @@
 {
   "api_key": "sk-REPLACE-WITH-YOUR-DEEPSEEK-API-KEY",
 
+  "providers": {
+    "anthropic": { "api_key": "sk-ant-REPLACE-WITH-YOUR-ANTHROPIC-API-KEY" }
+  },
+
   "search": {
     "provider": "brave",
 

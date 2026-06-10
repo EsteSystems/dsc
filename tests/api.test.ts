@@ -6,6 +6,7 @@ import * as os from "node:os";
 import {
   _resetConfigCachesForTests,
   apiKeySource,
+  availableModels,
   AVAILABLE_MODELS,
   computeCostUsd,
   configPath,
@@ -13,11 +14,15 @@ import {
   DEFAULT_MODEL,
   getConfig,
   hasApiKey,
+  isKnownModel,
   legacyConfigPath,
   migrateLegacyConfigIfNeeded,
+  modelAvailable,
   modelSpec,
   newStats,
   providerFor,
+  providerKeySource,
+  saveProviderKey,
   type Stats,
 } from "../src/api.js";
 
@@ -209,6 +214,76 @@ describe("model registry / provider routing", () => {
   it("providerFor falls back to the default model's provider for unknown ids", () => {
     // modelSpec() folds unknown ids to the default, so routing never dead-ends.
     assert.equal(providerFor("nonexistent").id, "deepseek");
+  });
+});
+
+describe("provider availability + key management", () => {
+  let tmpDir: string;
+  let prevXdg: string | undefined;
+  let prevAnthropic: string | undefined;
+
+  before(() => {
+    prevXdg = process.env.XDG_CONFIG_HOME;
+    prevAnthropic = process.env.ANTHROPIC_API_KEY;
+  });
+  after(() => {
+    if (prevXdg === undefined) delete process.env.XDG_CONFIG_HOME;
+    else process.env.XDG_CONFIG_HOME = prevXdg;
+    if (prevAnthropic === undefined) delete process.env.ANTHROPIC_API_KEY;
+    else process.env.ANTHROPIC_API_KEY = prevAnthropic;
+    _resetConfigCachesForTests();
+  });
+  beforeEach(() => {
+    tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "dsc-prov-test-"));
+    process.env.XDG_CONFIG_HOME = tmpDir;
+    delete process.env.ANTHROPIC_API_KEY;
+    _resetConfigCachesForTests();
+  });
+
+  it("isKnownModel recognizes registered ids and rejects others", () => {
+    assert.ok(isKnownModel("deepseek-v4-pro"));
+    assert.ok(isKnownModel("claude-sonnet-4-6"));
+    assert.ok(!isKnownModel("not-a-model"));
+  });
+
+  it("DeepSeek is always available; Claude needs a key", () => {
+    assert.ok(modelAvailable("deepseek-v4-pro"));
+    assert.equal(modelAvailable("claude-sonnet-4-6"), false);
+    assert.ok(!availableModels().includes("claude-sonnet-4-6"));
+    assert.ok(availableModels().includes("deepseek-v4-pro"));
+  });
+
+  it("ANTHROPIC_API_KEY (env) makes Claude available", () => {
+    process.env.ANTHROPIC_API_KEY = "sk-ant-env";
+    assert.ok(modelAvailable("claude-sonnet-4-6"));
+    assert.ok(availableModels().includes("claude-sonnet-4-6"));
+    assert.equal(providerKeySource("anthropic"), "env");
+  });
+
+  it("saveProviderKey('anthropic') writes providers.anthropic.api_key", async () => {
+    const written = await saveProviderKey("anthropic", "sk-ant-file");
+    assert.equal(written, configPath());
+    _resetConfigCachesForTests();
+    assert.equal(providerKeySource("anthropic"), "file");
+    assert.ok(modelAvailable("claude-sonnet-4-6"));
+    const cfg = JSON.parse(fs.readFileSync(configPath(), "utf8"));
+    assert.equal(cfg.providers.anthropic.api_key, "sk-ant-file");
+  });
+
+  it("saveProviderKey('deepseek') writes the top-level api_key (back-compat)", async () => {
+    await saveProviderKey("deepseek", "sk-ds");
+    const cfg = JSON.parse(fs.readFileSync(configPath(), "utf8"));
+    assert.equal(cfg.api_key, "sk-ds");
+  });
+
+  it("saveProviderKey preserves unrelated config fields", async () => {
+    fs.mkdirSync(path.dirname(configPath()), { recursive: true });
+    fs.writeFileSync(configPath(), JSON.stringify({ api_key: "sk-ds", search: { provider: "brave" } }));
+    await saveProviderKey("anthropic", "sk-ant");
+    const cfg = JSON.parse(fs.readFileSync(configPath(), "utf8"));
+    assert.equal(cfg.api_key, "sk-ds");
+    assert.equal(cfg.search.provider, "brave");
+    assert.equal(cfg.providers.anthropic.api_key, "sk-ant");
   });
 });
 

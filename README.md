@@ -14,8 +14,11 @@ normal scrollback so they stay selectable and copy/paste-able. One-shot
 mode (`dsc "prompt"`) runs the agent against stdout and exits without
 rendering ink, so it pipes cleanly into scripts.
 
-Currently powered by [DeepSeek](https://api-docs.deepseek.com/);
-multi-provider support (Claude, OpenAI, Ollama) is on the roadmap.
+Powered by [DeepSeek](https://api-docs.deepseek.com/) (default) and
+[Anthropic](https://docs.anthropic.com/) (Claude) — pick a model with
+`-m` or `/model` and dsc routes to the right provider automatically.
+OpenAI and Ollama are on the roadmap (the OpenAI-compatible transport is
+already in place). See [Providers & models](#providers--models).
 
 ## Install
 
@@ -248,6 +251,50 @@ setx DEEPSEEK_API_KEY "sk-..."                          # cmd.exe (persisted)
 { "env": { "ANTHROPIC_AUTH_TOKEN": "sk-..." } }           // claude-switcher compat
 ```
 
+## Providers & models
+
+dsc routes by model: each model belongs to a provider, and the active
+model selects the transport, API key, and pricing automatically. Pick a
+model with `-m <name>` at launch or `/model <name>` in the TUI.
+
+| Model | Provider | Key |
+|---|---|---|
+| `deepseek-v4-pro` (default) | DeepSeek | `DEEPSEEK_API_KEY` / `api_key` |
+| `deepseek-v4-flash` | DeepSeek | `DEEPSEEK_API_KEY` / `api_key` |
+| `claude-sonnet-4-6` | Anthropic | `ANTHROPIC_API_KEY` / `providers.anthropic.api_key` |
+
+`/model` (no arg) lists the models available **right now** — a model
+only shows up once its provider has a key. DeepSeek always shows so the
+first-launch flow has something to select. Switching to a model whose
+key isn't set prints how to set it instead of failing on the next turn.
+
+### Adding an Anthropic (Claude) key
+
+Any of:
+
+```sh
+export ANTHROPIC_API_KEY=sk-ant-...        # env (any shell)
+```
+```
+> /api-key anthropic sk-ant-...            # in the TUI → writes config
+```
+```jsonc
+// ~/.config/dsc/config.json
+{
+  "api_key": "sk-...",                      // DeepSeek (unchanged)
+  "providers": {
+    "anthropic": { "api_key": "sk-ant-..." }
+  }
+}
+```
+
+Then `dsc -m claude-sonnet-4-6` or `/model claude-sonnet-4-6`. `/api-key`
+with no argument shows every provider's key status at a glance.
+
+> OpenAI and Ollama aren't registered yet, but the OpenAI-compatible
+> transport that backs DeepSeek already covers them — they're a model
+> registry entry + key away.
+
 ## Quick start
 
 ```sh
@@ -295,7 +342,7 @@ ghost-text suggestion previews the match as you type.
 
 | Command | What it does |
 |---|---|
-| `/api-key [key]` | Show where the key is loaded from (env / config file / unset). With a key arg, write it to `~/.config/dsc/config.json` with `0600` perms. When unset, prints the DeepSeek signup URL. |
+| `/api-key [provider] [key]` | No arg: show every provider's key status + signup URL. `<key>` alone saves it as the DeepSeek key (back-compat). `<provider> <key>` saves that provider's key (`deepseek` → top-level `api_key`; others → `providers.<id>.api_key`) to `~/.config/dsc/config.json` with `0600` perms. `<provider>` alone shows that provider's status + signup. |
 | `/search` / `/search use <p>` / `/search key <p> [key]` | Inspect / switch the active search provider, or show / save a per-provider key. No-arg prints active provider + key status + signup URLs. `use brave\|tavily\|ddg` writes `search.provider`. `key <provider> [key]` shows signup URL when no key, saves under `search.<provider>.api_key` when given one. |
 | `/update` | Force-check npm for a newer release and install it (`npm install -g @este.systems/dsc@latest`). The TUI also checks once a day in the background and surfaces a one-line "X available" notice when behind. |
 | `/copy` | Copy the most recent assistant response to the OS clipboard (pbcopy / clip / wl-copy / xclip / xsel). |
@@ -303,7 +350,7 @@ ghost-text suggestion previews the match as you type.
 | `/import <path> [--keep-cwd]` | Load a session from a JSON file as the active session. Rebinds cwd to the current directory by default so auto-resume picks it up here; `--keep-cwd` preserves the original. Mints a fresh id on collision (no overwrites). |
 | `/clear` | Start a new session. Old session stays on disk. Also drops per-tool "always" approvals. |
 | `/cost` | Show token usage and estimated cost so far. |
-| `/model [name]` | Show or switch model. Available: `deepseek-v4-pro`, `deepseek-v4-flash`. |
+| `/model [name]` | Show or switch model (no arg lists the models available right now). Switching to a provider model whose key isn't set prints how to set it rather than silently failing. See [Providers & models](#providers--models). |
 | `/yolo` | Toggle approval mode (write/edit/bash/web_fetch). |
 | `/reasoning [on\|off]` | Show/hide `reasoning_content` from thinking models. Default on. |
 | `/lang [name\|off]` | Force the model to reply exclusively in a named language. |

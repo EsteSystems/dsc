@@ -13,6 +13,7 @@ process.env.XDG_DATA_HOME = path.join(SANDBOX, "data");
 process.env.XDG_STATE_HOME = path.join(SANDBOX, "state");
 process.env.DSC_NO_AUDIT = "1";
 delete process.env.DEEPSEEK_API_KEY;
+delete process.env.ANTHROPIC_API_KEY;
 // Several commands persist preferences via a fire-and-forget `void
 // savePreferences(...)`. Pre-create the config dir so those writes (which
 // outlive the synchronous handler) can't ENOENT, and drain them between
@@ -22,7 +23,7 @@ const flush = () => new Promise((r) => setTimeout(r, 30));
 
 import { dispatchSlash, type SlashContext } from "../src/slash_dispatch.js";
 import * as historyMod from "../src/history.js";
-import { newStats, type Message, type Model } from "../src/api.js";
+import { newStats, _resetConfigCachesForTests, type Message, type Model } from "../src/api.js";
 import { setState } from "../src/store.js";
 
 // A harness that builds a SlashContext over mutable state and records every
@@ -341,5 +342,57 @@ describe("/instructions and /mcp with nothing configured", () => {
     const { ctx, emitted } = makeCtx();
     await dispatchSlash("/mcp", ctx);
     assert.match(last(emitted), /No MCP servers connected/);
+  });
+});
+
+describe("/api-key (multi-provider)", () => {
+  it("lists every provider's key status with no arg", async () => {
+    const { ctx, emitted } = makeCtx();
+    await dispatchSlash("/api-key", ctx);
+    assert.match(last(emitted), /deepseek:/);
+    assert.match(last(emitted), /anthropic:/);
+  });
+
+  it("saves a named provider's key", async () => {
+    const { ctx, emitted } = makeCtx();
+    await dispatchSlash("/api-key anthropic sk-ant-123", ctx);
+    assert.match(last(emitted), /anthropic key saved to/);
+  });
+
+  it("treats a bare key as the DeepSeek key (back-compat)", async () => {
+    const { ctx, emitted } = makeCtx();
+    await dispatchSlash("/api-key sk-deepseek-bare", ctx);
+    assert.match(last(emitted), /deepseek key saved to/);
+  });
+
+  it("shows status + signup for a named provider with no key", async () => {
+    const { ctx, emitted } = makeCtx();
+    await dispatchSlash("/api-key anthropic", ctx);
+    assert.match(last(emitted), /anthropic/);
+    assert.match(last(emitted), /console\.anthropic\.com|signup/);
+  });
+});
+
+describe("/model availability", () => {
+  it("rejects a provider model with no key, pointing at /api-key", async () => {
+    // Isolate: fresh empty config + no Anthropic key so Claude is unavailable,
+    // regardless of what other tests in this process have saved.
+    const prevXdg = process.env.XDG_CONFIG_HOME;
+    const prevA = process.env.ANTHROPIC_API_KEY;
+    process.env.XDG_CONFIG_HOME = fs.mkdtempSync(path.join(SANDBOX, "noenv-"));
+    delete process.env.ANTHROPIC_API_KEY;
+    _resetConfigCachesForTests();
+    try {
+      const { ctx, emitted, calls } = makeCtx();
+      await dispatchSlash("/model claude-sonnet-4-6", ctx);
+      assert.match(last(emitted), /needs the Anthropic API key/);
+      assert.equal(calls.setModel.length, 0);
+    } finally {
+      if (prevXdg === undefined) delete process.env.XDG_CONFIG_HOME;
+      else process.env.XDG_CONFIG_HOME = prevXdg;
+      if (prevA === undefined) delete process.env.ANTHROPIC_API_KEY;
+      else process.env.ANTHROPIC_API_KEY = prevA;
+      _resetConfigCachesForTests();
+    }
   });
 });

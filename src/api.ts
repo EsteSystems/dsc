@@ -312,6 +312,94 @@ export function apiKeySource(): "env" | "file" | null {
   }
 }
 
+export interface ProviderKeyInfo {
+  label: string;
+  envVar: string;
+  signup: string;
+}
+
+/** Per-provider key metadata for `/api-key` and onboarding messages. */
+export const PROVIDER_KEY_INFO: Partial<Record<ProviderId, ProviderKeyInfo>> = {
+  deepseek: {
+    label: "DeepSeek",
+    envVar: "DEEPSEEK_API_KEY",
+    signup: "https://platform.deepseek.com/api_keys",
+  },
+  anthropic: {
+    label: "Anthropic",
+    envVar: "ANTHROPIC_API_KEY",
+    signup: "https://console.anthropic.com/settings/keys",
+  },
+};
+
+/** Read a non-DeepSeek provider's key from `providers.<id>.api_key`. */
+function configProviderKey(provider: ProviderId): string | null {
+  const cfg = getConfig();
+  const providers =
+    cfg && typeof cfg.providers === "object" && cfg.providers
+      ? (cfg.providers as Record<string, unknown>)
+      : null;
+  const p = providers?.[provider];
+  const k = p && typeof p === "object" ? (p as Record<string, unknown>).api_key : undefined;
+  return typeof k === "string" && k.length ? k : null;
+}
+
+/** Where a provider's key comes from, without revealing it. */
+export function providerKeySource(provider: ProviderId): "env" | "file" | null {
+  // DeepSeek has the richer legacy reader (env var, top-level api_key, env block).
+  if (provider === "deepseek") return apiKeySource();
+  const info = PROVIDER_KEY_INFO[provider];
+  if (info && process.env[info.envVar]) return "env";
+  try {
+    return configProviderKey(provider) ? "file" : null;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Save a provider's API key to the config file, preserving other fields.
+ * DeepSeek writes the top-level `api_key` (back-compat with getApiKey);
+ * every other provider writes `providers.<id>.api_key`.
+ */
+export async function saveProviderKey(provider: ProviderId, key: string): Promise<string> {
+  const trimmed = key.trim();
+  if (!trimmed) throw new DeepSeekError("api key is empty");
+  if (provider === "deepseek") return saveApiKey(trimmed);
+
+  const p = configPath();
+  await fsp.mkdir(nodePath.dirname(p), { recursive: true });
+  let existing: Record<string, unknown> = {};
+  try {
+    let txt = await fsp.readFile(p, "utf8");
+    if (txt.charCodeAt(0) === 0xfeff) txt = txt.slice(1);
+    const parsed = JSON.parse(txt);
+    if (parsed && typeof parsed === "object") existing = parsed as Record<string, unknown>;
+  } catch {
+    // missing or unparseable — start fresh
+  }
+  const providers =
+    existing.providers && typeof existing.providers === "object"
+      ? (existing.providers as Record<string, unknown>)
+      : {};
+  const sub =
+    providers[provider] && typeof providers[provider] === "object"
+      ? (providers[provider] as Record<string, unknown>)
+      : {};
+  sub.api_key = trimmed;
+  providers[provider] = sub;
+  existing.providers = providers;
+
+  await fsp.writeFile(p, JSON.stringify(existing, null, 2), { encoding: "utf8", mode: 0o600 });
+  try {
+    await fsp.chmod(p, 0o600);
+  } catch {
+    // POSIX-only; ignore on Windows
+  }
+  _cachedConfig = undefined;
+  return p;
+}
+
 /**
  * Merge `key` into the config file at `configPath()`, creating the file +
  * parent directory if needed. Preserves any other fields already in the
@@ -523,14 +611,7 @@ const ANTHROPIC_DEFAULT_MAX_TOKENS = 8192;
 function anthropicKey(): string | null {
   const env = process.env.ANTHROPIC_API_KEY;
   if (env) return env;
-  const cfg = getConfig();
-  const providers =
-    cfg && typeof cfg.providers === "object" && cfg.providers
-      ? (cfg.providers as Record<string, unknown>)
-      : null;
-  const a = providers?.anthropic;
-  const k = a && typeof a === "object" ? (a as Record<string, unknown>).api_key : undefined;
-  return typeof k === "string" && k.length ? k : null;
+  return configProviderKey("anthropic");
 }
 
 function requireAnthropicKey(): string {
@@ -834,6 +915,30 @@ const PROVIDERS: Partial<Record<ProviderId, Provider>> = {
   deepseek: deepseekProvider,
   anthropic: anthropicProvider,
 };
+
+/** Whether a model id is registered (regardless of key availability). Used by
+ *  the session loader so resuming a session keyed to any known model works. */
+export function isKnownModel(model: Model): boolean {
+  return model in MODEL_REGISTRY;
+}
+
+/** Whether a model can actually be used right now — its provider has a key.
+ *  The default provider (DeepSeek) is always considered available so the
+ *  first-launch "set your key" flow still surfaces a model to select. */
+export function modelAvailable(model: Model): boolean {
+  const spec = MODEL_REGISTRY[model];
+  if (!spec) return false;
+  if (spec.provider === MODEL_REGISTRY[DEFAULT_MODEL].provider) return true;
+  const p = PROVIDERS[spec.provider];
+  return !!p && p.resolveKey() !== null;
+}
+
+/** Model ids dsc will offer right now — registered AND usable (provider key
+ *  present, or the default provider). This is the list `/model` and `--help`
+ *  should show; `AVAILABLE_MODELS` remains the full registry for validation. */
+export function availableModels(): Model[] {
+  return AVAILABLE_MODELS.filter(modelAvailable);
+}
 
 /** The Provider that serves a given model, via the registry. */
 export function providerFor(model: Model): Provider {

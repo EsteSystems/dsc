@@ -10,15 +10,20 @@
 // shared by every front-end.
 
 import {
-  AVAILABLE_MODELS,
-  apiKeySource,
+  availableModels,
   computeCostUsd,
   configPath,
-  saveApiKey,
+  isKnownModel,
+  modelAvailable,
+  modelSpec,
+  PROVIDER_KEY_INFO,
+  providerKeySource,
+  saveProviderKey,
   saveSearchKey,
   saveSearchProvider,
   type Message,
   type Model,
+  type ProviderId,
   type Stats,
 } from "./api.js";
 import { formatCost } from "./agent.js";
@@ -105,7 +110,7 @@ const HELP_LINES = [
   "/resume [n|name|id]     resume a session",
   "/save <name>            name the current session",
   "/rename <text>          set assistant label for this session",
-  "/model [name]           show or switch model",
+  "/model [name]           show available models or switch (routes to its provider)",
   "/yolo                   toggle approval mode",
   "/reasoning [on|off]     toggle reasoning display",
   "/lang [name|off]        force the model to reply in a language",
@@ -123,7 +128,7 @@ const HELP_LINES = [
   "/queue [clear]          list or clear queued prompts",
   "/export [path]          write current session JSON for transfer",
   "/import <path>          load session JSON; rebinds cwd here (--keep-cwd to skip)",
-  "/api-key [key]          show source / save api key to config file",
+  "/api-key [provider] [key]  show key status / save a provider's api key",
   "/search [use|key] …     show / switch search provider / save brave|tavily key",
   "/update                 check npm for a newer dsc and install it",
   "/edit [text]            open $EDITOR; the saved buffer becomes the next prompt",
@@ -295,11 +300,19 @@ export async function dispatchSlash(line: string, ctx: SlashContext): Promise<bo
     }
     case "model":
       if (!arg) {
-        emit(`current model: ${ctx.getModel()}`);
-      } else if (!AVAILABLE_MODELS.includes(arg as Model)) {
-        emit(`error: unknown model: ${arg} (available: ${AVAILABLE_MODELS.join(", ")})`);
+        emit(`current model: ${ctx.getModel()}\navailable: ${availableModels().join(", ")}`);
+      } else if (!isKnownModel(arg)) {
+        emit(`error: unknown model: ${arg} (available: ${availableModels().join(", ")})`);
+      } else if (!modelAvailable(arg)) {
+        // Registered but its provider has no key — point the user at /api-key.
+        const prov = modelSpec(arg).provider;
+        const info = PROVIDER_KEY_INFO[prov];
+        emit(
+          `error: ${arg} needs the ${info?.label ?? prov} API key. ` +
+            `Set $${info?.envVar ?? "<KEY>"} or run /api-key ${prov} <key>.`,
+        );
       } else {
-        ctx.setModel(arg as Model);
+        ctx.setModel(arg);
         ctx.syncStatus();
         emit(`model → ${arg}`);
         await ctx.persist();
@@ -558,23 +571,50 @@ export async function dispatchSlash(line: string, ctx: SlashContext): Promise<bo
       return true;
     }
     case "api-key": {
-      const text = arg.trim();
-      if (!text) {
-        const src = apiKeySource();
-        if (src === "env") {
-          emit("api key: set via $DEEPSEEK_API_KEY (env)");
-        } else if (src === "file") {
-          emit(`api key: stored in ${configPath()}`);
-        } else {
-          emit(
-            `api key: not set\nGet one at https://platform.deepseek.com/api_keys, then run /api-key <key> (or export DEEPSEEK_API_KEY in your shell).`,
-          );
-        }
+      // /api-key                      → status for every provider
+      // /api-key <key>                → save DeepSeek key (back-compat)
+      // /api-key <provider>           → that provider's status + signup
+      // /api-key <provider> <key>     → save that provider's key
+      const providerIds = Object.keys(PROVIDER_KEY_INFO) as ProviderId[];
+      const statusLine = (p: ProviderId): string => {
+        const info = PROVIDER_KEY_INFO[p]!;
+        const src = providerKeySource(p);
+        const status =
+          src === "env" ? `set via $${info.envVar}` : src === "file" ? "stored in config" : "not set";
+        return `  ${p}: ${status}  —  ${info.signup}`;
+      };
+
+      const tokens = arg.trim().split(/\s+/).filter(Boolean);
+      if (tokens.length === 0) {
+        emit(
+          [
+            `api keys (config: ${configPath()}):`,
+            ...providerIds.map(statusLine),
+            "",
+            "Save: /api-key [provider] <key>   (provider defaults to deepseek)",
+          ].join("\n"),
+        );
+        return true;
+      }
+
+      const first = tokens[0] as ProviderId;
+      const named = providerIds.includes(first);
+      const provider: ProviderId = named ? first : "deepseek";
+      const keyValue = (named ? tokens.slice(1) : tokens).join(" ");
+
+      if (!keyValue) {
+        // `/api-key <provider>` with no key — show its status + how to set it.
+        const info = PROVIDER_KEY_INFO[provider]!;
+        emit(
+          providerKeySource(provider)
+            ? statusLine(provider)
+            : `${provider}: not set\nsignup: ${info.signup}\nsave with: /api-key ${provider} <key> (or export $${info.envVar})`,
+        );
         return true;
       }
       try {
-        const written = await saveApiKey(text);
-        emit(`api key saved to ${written}`);
+        const written = await saveProviderKey(provider, keyValue);
+        emit(`${provider} key saved to ${written}`);
       } catch (e) {
         emit(`error: ${(e as Error).message}`);
       }
