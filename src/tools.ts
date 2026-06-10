@@ -83,6 +83,37 @@ export const TOOL_SCHEMAS: ToolSchema[] = [
   {
     type: "function",
     function: {
+      name: "multi_edit",
+      description:
+        "Apply a sequence of edits to a single file in one atomic operation. Edits are applied in order, each operating on the result of the previous one; if any edit fails to match, nothing is written. Prefer this over multiple edit_file calls when making several changes to the same file.",
+      parameters: {
+        type: "object",
+        properties: {
+          path: { type: "string", description: "Path to the file." },
+          edits: {
+            type: "array",
+            description: "Edits applied in order. Each: old_string → new_string.",
+            items: {
+              type: "object",
+              properties: {
+                old_string: { type: "string", description: "Exact text to replace." },
+                new_string: { type: "string", description: "Replacement text." },
+                replace_all: {
+                  type: "boolean",
+                  description: "If true, replace every occurrence (uniqueness not required).",
+                },
+              },
+              required: ["old_string", "new_string"],
+            },
+          },
+        },
+        required: ["path", "edits"],
+      },
+    },
+  },
+  {
+    type: "function",
+    function: {
       name: "bash",
       description:
         "Run a shell command. Always works regardless of OS — uses /bin/sh -c on Linux/macOS and cmd.exe /d /s /c on Windows. Pick syntax that matches the host: e.g. `ls` on Linux/macOS vs `dir` on Windows; `cat` vs `type`; `which` vs `where`; `rm` vs `del`; `mv` vs `move`. Package managers on Windows are `winget install <pkg>` (built-in on Windows 10 1809+ / 11) and `scoop install <pkg>` — apt/brew/yum/pacman don't exist there. For Node version management on Windows, use nvm-windows or fnm. Check the cwd in the system prompt to know which platform you're on (paths starting with a drive letter like C:\\ mean Windows). Output is captured and truncated if very long. Long-running interactive commands are not supported.",
@@ -341,6 +372,9 @@ export async function executeTool(
     case "edit_file":
       result = await editFile(args, ctx);
       break;
+    case "multi_edit":
+      result = await multiEdit(args, ctx);
+      break;
     case "bash":
       result = await runBash(args, ctx, signal);
       break;
@@ -521,6 +555,98 @@ async function editFile(args: Record<string, unknown>, ctx: ToolContext): Promis
   return {
     content: `ok: edited ${abs} (${occurrences} replacement${occurrences === 1 ? "" : "s"})`,
     audit: { path: abs, replacements: occurrences },
+  };
+}
+
+interface EditOp {
+  old_string: string;
+  new_string: string;
+  replace_all: boolean;
+}
+
+/** Parse + validate the `edits` argument into a typed list, or return an
+ *  error string describing the first malformed entry. */
+function parseEdits(raw: unknown): EditOp[] | string {
+  if (!Array.isArray(raw)) return "edits must be an array";
+  if (raw.length === 0) return "edits must not be empty";
+  const out: EditOp[] = [];
+  for (let i = 0; i < raw.length; i++) {
+    const e = raw[i];
+    if (!e || typeof e !== "object") return `edit #${i + 1}: must be an object`;
+    const rec = e as Record<string, unknown>;
+    const oldStr = typeof rec.old_string === "string" ? rec.old_string : "";
+    const newStr = typeof rec.new_string === "string" ? rec.new_string : "";
+    if (oldStr === "") return `edit #${i + 1}: old_string must not be empty`;
+    out.push({ old_string: oldStr, new_string: newStr, replace_all: Boolean(rec.replace_all) });
+  }
+  return out;
+}
+
+async function multiEdit(args: Record<string, unknown>, ctx: ToolContext): Promise<ToolResult> {
+  const p = String(args.path ?? "");
+  if (!p) return { content: "error: missing 'path'", audit: { error: "missing_path" } };
+  const edits = parseEdits(args.edits);
+  if (typeof edits === "string") {
+    return { content: `error: ${edits}`, audit: { path: p, error: "bad_edits" } };
+  }
+
+  const abs = resolvePath(ctx, p);
+  if (!(await exists(abs))) {
+    return { content: `error: file does not exist: ${abs}`, audit: { path: abs, error: "missing" } };
+  }
+  let original: string;
+  try {
+    original = await fs.readFile(abs, "utf8");
+  } catch (e: unknown) {
+    return { content: `error: ${(e as Error).message}`, audit: { path: abs, error: "read_failed" } };
+  }
+
+  // Apply every edit in memory first; a failure anywhere writes nothing, so
+  // the file is never left half-patched. Each edit sees the prior edits'
+  // result, matching how a human would stack them.
+  let current = original;
+  let totalReplacements = 0;
+  for (let i = 0; i < edits.length; i++) {
+    const { old_string, new_string, replace_all } = edits[i];
+    const occurrences = current.split(old_string).length - 1;
+    if (occurrences === 0) {
+      return {
+        content: `error: edit #${i + 1}: old_string not found${i > 0 ? " (after applying earlier edits)" : ""}`,
+        audit: { path: abs, error: "not_found", edit: i + 1 },
+      };
+    }
+    if (occurrences > 1 && !replace_all) {
+      return {
+        content: `error: edit #${i + 1}: old_string is not unique (matches ${occurrences} times). Pass replace_all=true or add surrounding context.`,
+        audit: { path: abs, error: "not_unique", edit: i + 1, occurrences },
+      };
+    }
+    current = replace_all
+      ? current.split(old_string).join(new_string)
+      : current.replace(old_string, new_string);
+    totalReplacements += replace_all ? occurrences : 1;
+  }
+
+  if (current === original) {
+    return {
+      content: `error: edits produced no change to ${abs}`,
+      audit: { path: abs, error: "no_change" },
+    };
+  }
+
+  const approved = await gateApproval(ctx, "multi_edit", () => confirmEdit(abs, original, current));
+  if (!approved) {
+    return {
+      content: "rejected by user",
+      rejected: true,
+      audit: { path: abs, edits: edits.length, replacements: totalReplacements },
+    };
+  }
+  await fs.writeFile(abs, current, "utf8");
+  ctx.filesTouched.add(abs);
+  return {
+    content: `ok: applied ${edits.length} edit${edits.length === 1 ? "" : "s"} to ${abs} (${totalReplacements} replacement${totalReplacements === 1 ? "" : "s"})`,
+    audit: { path: abs, edits: edits.length, replacements: totalReplacements },
   };
 }
 

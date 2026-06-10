@@ -9,6 +9,7 @@ Available tools:
 - read_file(path, offset?, limit?): read a file (returns lines with 1-based numbers).
 - write_file(path, content): create a new file or fully overwrite an existing one. Prefer edit_file for changes to existing files.
 - edit_file(path, old_string, new_string, replace_all?): replace an exact substring. old_string must be unique in the file unless replace_all is true. Include enough surrounding context to make old_string unique.
+- multi_edit(path, edits): apply several edits to one file in a single atomic call (each edit is {old_string, new_string, replace_all?}, applied in order). Prefer this over multiple edit_file calls on the same file.
 - bash(command, description?, timeout_ms?): run a shell command. Output is captured and truncated if very long.
 - grep(pattern, path?, glob?, case_insensitive?): regex search across files (ripgrep when available, grep -rn fallback). Prefer this over running grep through bash for finding code.
 - glob(pattern, path?): list paths matching a glob (e.g. 'src/**/*.ts'). Prefer this over running find through bash.

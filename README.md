@@ -446,6 +446,7 @@ the archived messages from `/transcript`.
 | `task_list()` | none | Returns the current task list with statuses. |
 | `write_file(path, content)` | yes (unless `--yolo`) | Side-by-side diff inside the approval dialog. |
 | `edit_file(path, old_string, new_string, replace_all?)` | yes | Exact substring replace; old_string must be unique unless `replace_all=true`. |
+| `multi_edit(path, edits)` | yes | Apply a sequence of edits to one file atomically (all-or-nothing). Each edit is `{old_string, new_string, replace_all?}`, applied in order; one approval shows the cumulative diff. Beats N `edit_file` calls for multi-change refactors. |
 | `bash(command, description?, timeout_ms?)` | yes | `/bin/sh` on Linux/macOS, `cmd.exe` on Windows. Output capped at 16 KB. |
 | `web_fetch(url)` | yes | HTML stripped to text, capped at 50 KB. |
 

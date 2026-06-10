@@ -241,6 +241,133 @@ describe("edit_file", () => {
 });
 
 // ---------------------------------------------------------------------------
+// multi_edit
+// ---------------------------------------------------------------------------
+
+describe("multi_edit", () => {
+  it("applies a sequence of edits atomically", async () => {
+    const f = tmpFile("multi.txt");
+    fs.writeFileSync(f, "alpha beta gamma");
+    const r = await executeTool(
+      "multi_edit",
+      j({
+        path: f,
+        edits: [
+          { old_string: "alpha", new_string: "ALPHA" },
+          { old_string: "gamma", new_string: "GAMMA" },
+        ],
+      }),
+      ctx(),
+    );
+    assert.match(r.content, /ok: applied 2 edits/);
+    assert.equal(fs.readFileSync(f, "utf8"), "ALPHA beta GAMMA");
+  });
+
+  it("applies edits in order, each seeing the previous result", async () => {
+    const f = tmpFile("multi-seq.txt");
+    fs.writeFileSync(f, "one");
+    const r = await executeTool(
+      "multi_edit",
+      j({
+        path: f,
+        edits: [
+          { old_string: "one", new_string: "two" },
+          { old_string: "two", new_string: "three" }, // matches edit #1's output
+        ],
+      }),
+      ctx(),
+    );
+    assert.match(r.content, /ok: applied 2 edits/);
+    assert.equal(fs.readFileSync(f, "utf8"), "three");
+  });
+
+  it("supports replace_all within an edit", async () => {
+    const f = tmpFile("multi-all.txt");
+    fs.writeFileSync(f, "x x x | y");
+    const r = await executeTool(
+      "multi_edit",
+      j({
+        path: f,
+        edits: [
+          { old_string: "x", new_string: "z", replace_all: true },
+          { old_string: "y", new_string: "w" },
+        ],
+      }),
+      ctx(),
+    );
+    assert.match(r.content, /ok: applied 2 edits/);
+    assert.equal(fs.readFileSync(f, "utf8"), "z z z | w");
+  });
+
+  it("is atomic: a later failed edit leaves the file untouched", async () => {
+    const f = tmpFile("multi-atomic.txt");
+    fs.writeFileSync(f, "foo bar");
+    const r = await executeTool(
+      "multi_edit",
+      j({
+        path: f,
+        edits: [
+          { old_string: "foo", new_string: "X" },
+          { old_string: "zzz", new_string: "Y" }, // not found → whole op fails
+        ],
+      }),
+      ctx(),
+    );
+    assert.match(r.content, /edit #2: old_string not found/);
+    assert.equal(fs.readFileSync(f, "utf8"), "foo bar", "file must be unchanged");
+  });
+
+  it("errors when an edit's old_string is not unique without replace_all", async () => {
+    const f = tmpFile("multi-uniq.txt");
+    fs.writeFileSync(f, "a a a");
+    const r = await executeTool(
+      "multi_edit",
+      j({ path: f, edits: [{ old_string: "a", new_string: "b" }] }),
+      ctx(),
+    );
+    assert.match(r.content, /edit #1: old_string is not unique/);
+    assert.equal(fs.readFileSync(f, "utf8"), "a a a");
+  });
+
+  it("rejects an empty edits array and an empty old_string", async () => {
+    const f = tmpFile("multi-empty.txt");
+    fs.writeFileSync(f, "z");
+    const r1 = await executeTool("multi_edit", j({ path: f, edits: [] }), ctx());
+    assert.match(r1.content, /edits must not be empty/);
+    const r2 = await executeTool(
+      "multi_edit",
+      j({ path: f, edits: [{ old_string: "", new_string: "q" }] }),
+      ctx(),
+    );
+    assert.match(r2.content, /old_string must not be empty/);
+  });
+
+  it("errors on a missing file and a missing path", async () => {
+    const r1 = await executeTool(
+      "multi_edit",
+      j({ path: tmpFile("absent.txt"), edits: [{ old_string: "a", new_string: "b" }] }),
+      ctx(),
+    );
+    assert.match(r1.content, /file does not exist/);
+    const r2 = await executeTool("multi_edit", j({ edits: [{ old_string: "a", new_string: "b" }] }), ctx());
+    assert.match(r2.content, /missing 'path'/);
+  });
+
+  it("does not write when the user rejects", async () => {
+    const f = tmpFile("multi-reject.txt");
+    fs.writeFileSync(f, "keep me");
+    setAsker(async () => "no");
+    const r = await executeTool(
+      "multi_edit",
+      j({ path: f, edits: [{ old_string: "keep", new_string: "drop" }] }),
+      ctx({ yolo: false }),
+    );
+    assert.equal(r.rejected, true);
+    assert.equal(fs.readFileSync(f, "utf8"), "keep me");
+  });
+});
+
+// ---------------------------------------------------------------------------
 // Approval gating semantics (shared across write/edit/bash/web_fetch)
 // ---------------------------------------------------------------------------
 
@@ -450,7 +577,7 @@ describe("tool surface", () => {
     for (const t of ["read_file", "grep", "glob", "web_search", "task_create", "task_list"]) {
       assert.ok(READ_ONLY_TOOLS.has(t), `${t} should be read-only`);
     }
-    for (const t of ["write_file", "edit_file", "bash", "web_fetch"]) {
+    for (const t of ["write_file", "edit_file", "multi_edit", "bash", "web_fetch"]) {
       assert.ok(!READ_ONLY_TOOLS.has(t), `${t} should require approval`);
     }
   });
@@ -469,7 +596,7 @@ describe("tool surface", () => {
   it("advertises the documented built-in tools", () => {
     const names = new Set(TOOL_SCHEMAS.map((s) => s.function.name));
     for (const t of [
-      "read_file", "write_file", "edit_file", "bash", "grep", "glob",
+      "read_file", "write_file", "edit_file", "multi_edit", "bash", "grep", "glob",
       "web_fetch", "web_search", "task_create", "task_update", "task_list",
     ]) {
       assert.ok(names.has(t), `schema should advertise ${t}`);
