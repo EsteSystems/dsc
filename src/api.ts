@@ -14,6 +14,8 @@ export interface ModelSpec {
   provider: ProviderId;
   rates: ModelRates;
   contextWindow?: number;
+  /** Required by some providers (Anthropic). Caps the response length. */
+  maxTokens?: number;
 }
 
 // Registry of every model dsc knows. The active model is the routing key: its
@@ -32,6 +34,15 @@ export const MODEL_REGISTRY: Record<string, ModelSpec> = {
     provider: "deepseek",
     rates: { in_hit: 0.0028e-6, in_miss: 0.138e-6, out: 0.276e-6 },
     contextWindow: 1_000_000,
+  },
+  // Anthropic. Pricing: $3/M input, $15/M output, $0.30/M cache read.
+  // Requires ANTHROPIC_API_KEY (env) or providers.anthropic.api_key (config).
+  "claude-sonnet-4-6": {
+    id: "claude-sonnet-4-6",
+    provider: "anthropic",
+    rates: { in_hit: 0.30e-6, in_miss: 3e-6, out: 15e-6 },
+    contextWindow: 200_000,
+    maxTokens: 8192,
   },
 };
 
@@ -489,8 +500,339 @@ const deepseekProvider = openAICompatProvider({
   requireKey: getApiKey,
 });
 
+// ---------------------------------------------------------------------------
+// Anthropic provider
+//
+// The Messages API differs from the OpenAI shape in several ways, so this
+// provider owns a translation layer in both directions:
+//   - system prompt is a top-level field, not a message
+//   - content is an array of blocks (text / tool_use / tool_result / thinking)
+//   - tool *calls* are assistant `tool_use` blocks; tool *results* go in a
+//     following user message as `tool_result` blocks (consecutive tool results
+//     coalesce into one user turn)
+//   - SSE is event-typed (message_start / content_block_delta / message_delta)
+//   - usage splits cached vs. fresh input tokens differently
+// The normalized request in / ChatResponse out matches every other provider,
+// so the agent loop never sees the difference.
+// ---------------------------------------------------------------------------
+
+export const ANTHROPIC_API_URL = "https://api.anthropic.com/v1/messages";
+const ANTHROPIC_VERSION = "2023-06-01";
+const ANTHROPIC_DEFAULT_MAX_TOKENS = 8192;
+
+function anthropicKey(): string | null {
+  const env = process.env.ANTHROPIC_API_KEY;
+  if (env) return env;
+  const cfg = getConfig();
+  const providers =
+    cfg && typeof cfg.providers === "object" && cfg.providers
+      ? (cfg.providers as Record<string, unknown>)
+      : null;
+  const a = providers?.anthropic;
+  const k = a && typeof a === "object" ? (a as Record<string, unknown>).api_key : undefined;
+  return typeof k === "string" && k.length ? k : null;
+}
+
+function requireAnthropicKey(): string {
+  const k = anthropicKey();
+  if (!k) {
+    throw new DeepSeekError(
+      `No Anthropic API key. Set ANTHROPIC_API_KEY, or add providers.anthropic.api_key to ${configPath()}.`,
+    );
+  }
+  return k;
+}
+
+type AnthropicBlock =
+  | { type: "text"; text: string }
+  | { type: "tool_use"; id: string; name: string; input: unknown }
+  | { type: "tool_result"; tool_use_id: string; content: string };
+
+interface AnthropicMessage {
+  role: "user" | "assistant";
+  content: string | AnthropicBlock[];
+}
+
+/** Translate the normalized message list into Anthropic's (system, messages)
+ *  pair. Runs of `tool` messages coalesce into a single user turn of
+ *  `tool_result` blocks, which must follow the assistant `tool_use` turn. */
+export function toAnthropic(messages: Message[]): { system?: string; messages: AnthropicMessage[] } {
+  let system: string | undefined;
+  const out: AnthropicMessage[] = [];
+  let pendingResults: AnthropicBlock[] = [];
+  const flush = () => {
+    if (pendingResults.length) {
+      out.push({ role: "user", content: pendingResults });
+      pendingResults = [];
+    }
+  };
+  for (const m of messages) {
+    if (m.role === "system") {
+      const text = typeof m.content === "string" ? m.content : "";
+      if (text) system = system ? `${system}\n\n${text}` : text;
+      continue;
+    }
+    if (m.role === "tool") {
+      pendingResults.push({
+        type: "tool_result",
+        tool_use_id: m.tool_call_id ?? "",
+        content: typeof m.content === "string" ? m.content : "",
+      });
+      continue;
+    }
+    flush();
+    if (m.role === "user") {
+      out.push({ role: "user", content: typeof m.content === "string" ? m.content : "" });
+    } else {
+      const blocks: AnthropicBlock[] = [];
+      if (typeof m.content === "string" && m.content) blocks.push({ type: "text", text: m.content });
+      for (const tc of m.tool_calls ?? []) {
+        let input: unknown = {};
+        try {
+          input = JSON.parse(tc.function.arguments || "{}");
+        } catch {
+          input = {};
+        }
+        blocks.push({ type: "tool_use", id: tc.id, name: tc.function.name, input });
+      }
+      // Anthropic rejects empty assistant content; guard (shouldn't happen).
+      if (blocks.length === 0) blocks.push({ type: "text", text: " " });
+      out.push({ role: "assistant", content: blocks });
+    }
+  }
+  flush();
+  return { system, messages: out };
+}
+
+export function toAnthropicTools(tools?: ToolSchema[]): unknown[] | undefined {
+  if (!tools || !tools.length) return undefined;
+  return tools.map((t) => ({
+    name: t.function.name,
+    description: t.function.description,
+    input_schema: t.function.parameters,
+  }));
+}
+
+export function mapAnthropicStop(s: string | undefined): string | undefined {
+  if (s === "tool_use") return "tool_calls";
+  if (s === "end_turn" || s === "stop_sequence") return "stop";
+  if (s === "max_tokens") return "length";
+  return s ?? undefined;
+}
+
+export function anthropicUsage(u: Record<string, number> | undefined): Usage | undefined {
+  if (!u) return undefined;
+  const input = u.input_tokens ?? 0;
+  const cacheRead = u.cache_read_input_tokens ?? 0;
+  const cacheCreate = u.cache_creation_input_tokens ?? 0;
+  const output = u.output_tokens ?? 0;
+  const prompt = input + cacheRead + cacheCreate;
+  return {
+    prompt_tokens: prompt,
+    completion_tokens: output,
+    total_tokens: prompt + output,
+    // Map cached reads to "hit"; fresh input + cache writes bill at "miss".
+    prompt_cache_hit_tokens: cacheRead,
+    prompt_cache_miss_tokens: input + cacheCreate,
+  };
+}
+
+function anthropicRequestBody(opts: CallOptions, spec: ModelSpec, stream: boolean): Record<string, unknown> {
+  const { system, messages } = toAnthropic(opts.messages);
+  const body: Record<string, unknown> = {
+    model: opts.model,
+    max_tokens: spec.maxTokens ?? ANTHROPIC_DEFAULT_MAX_TOKENS,
+    messages,
+    stream,
+  };
+  if (system) body.system = system;
+  const tools = toAnthropicTools(opts.tools);
+  if (tools) body.tools = tools;
+  return body;
+}
+
+function anthropicHeaders(apiKey: string, stream: boolean): Record<string, string> {
+  const h: Record<string, string> = {
+    "content-type": "application/json",
+    "x-api-key": apiKey,
+    "anthropic-version": ANTHROPIC_VERSION,
+  };
+  if (stream) h["accept"] = "text/event-stream";
+  return h;
+}
+
+async function anthropicChat(opts: CallOptions, spec: ModelSpec): Promise<ChatResponse> {
+  const apiKey = requireAnthropicKey();
+  const res = await fetch(ANTHROPIC_API_URL, {
+    method: "POST",
+    headers: anthropicHeaders(apiKey, false),
+    body: JSON.stringify(anthropicRequestBody(opts, spec, false)),
+    signal: opts.signal,
+  });
+  const text = await res.text();
+  if (!res.ok) throw new DeepSeekError(`HTTP ${res.status}`, res.status, text);
+  let data: any;
+  try {
+    data = JSON.parse(text);
+  } catch {
+    throw new DeepSeekError(`Invalid JSON response: ${text.slice(0, 200)}`);
+  }
+  const blocks = Array.isArray(data.content) ? data.content : [];
+  let content = "";
+  let reasoning = "";
+  const toolCalls: ToolCall[] = [];
+  for (const b of blocks) {
+    if (b.type === "text") content += b.text ?? "";
+    else if (b.type === "thinking") reasoning += b.thinking ?? "";
+    else if (b.type === "tool_use")
+      toolCalls.push({
+        id: b.id,
+        type: "function",
+        function: { name: b.name, arguments: JSON.stringify(b.input ?? {}) },
+      });
+  }
+  return {
+    choices: [
+      {
+        message: {
+          role: "assistant",
+          content: content || null,
+          tool_calls: toolCalls.length ? toolCalls : undefined,
+          reasoning_content: reasoning || undefined,
+        },
+        finish_reason: mapAnthropicStop(data.stop_reason),
+      },
+    ],
+    usage: anthropicUsage(data.usage),
+  };
+}
+
+async function anthropicStreamOnce(opts: StreamOptions, spec: ModelSpec): Promise<ChatResponse> {
+  const apiKey = requireAnthropicKey();
+  const res = await fetch(ANTHROPIC_API_URL, {
+    method: "POST",
+    headers: anthropicHeaders(apiKey, true),
+    body: JSON.stringify(anthropicRequestBody(opts, spec, true)),
+    signal: opts.signal,
+  });
+  if (!res.ok) {
+    const text = await res.text();
+    throw new DeepSeekError(`HTTP ${res.status}`, res.status, text);
+  }
+  if (!res.body) throw new DeepSeekError("No response body for stream");
+
+  let content = "";
+  let reasoning = "";
+  let stopReason: string | undefined;
+  const blocks: Record<number, { type?: string; id?: string; name?: string; args: string }> = {};
+  let uInput = 0;
+  let uCacheRead = 0;
+  let uCacheCreate = 0;
+  let uOutput = 0;
+
+  const reader = res.body.getReader();
+  const decoder = new TextDecoder("utf-8");
+  let buf = "";
+  while (true) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    buf += decoder.decode(value, { stream: true });
+    let nl: number;
+    while ((nl = buf.indexOf("\n")) >= 0) {
+      const rawLine = buf.slice(0, nl).replace(/\r$/, "");
+      buf = buf.slice(nl + 1);
+      // Anthropic sends "event: <type>" + "data: <json>"; the type is also in
+      // the JSON payload, so we route on that and ignore the event: lines.
+      if (!rawLine || rawLine.startsWith(":") || !rawLine.startsWith("data:")) continue;
+      const data = rawLine.slice(5).trim();
+      let evt: any;
+      try {
+        evt = JSON.parse(data);
+      } catch {
+        continue;
+      }
+      switch (evt.type) {
+        case "message_start": {
+          const u = evt.message?.usage;
+          if (u) {
+            uInput = u.input_tokens ?? 0;
+            uCacheRead = u.cache_read_input_tokens ?? 0;
+            uCacheCreate = u.cache_creation_input_tokens ?? 0;
+          }
+          break;
+        }
+        case "content_block_start": {
+          const idx: number = evt.index ?? 0;
+          const cb = evt.content_block ?? {};
+          blocks[idx] = { type: cb.type, id: cb.id, name: cb.name, args: "" };
+          break;
+        }
+        case "content_block_delta": {
+          const idx: number = evt.index ?? 0;
+          const d = evt.delta ?? {};
+          if (d.type === "text_delta" && d.text) {
+            content += d.text;
+            opts.onContent?.(d.text);
+          } else if (d.type === "thinking_delta" && d.thinking) {
+            reasoning += d.thinking;
+            opts.onReasoning?.(d.thinking);
+          } else if (d.type === "input_json_delta" && typeof d.partial_json === "string") {
+            if (blocks[idx]) blocks[idx].args += d.partial_json;
+          }
+          break;
+        }
+        case "message_delta": {
+          if (evt.delta?.stop_reason) stopReason = evt.delta.stop_reason;
+          if (evt.usage?.output_tokens != null) uOutput = evt.usage.output_tokens;
+          break;
+        }
+        // content_block_stop / message_stop / ping: nothing to accumulate.
+      }
+    }
+  }
+
+  const toolCalls: ToolCall[] = Object.keys(blocks)
+    .map(Number)
+    .sort((a, b) => a - b)
+    .map((i) => blocks[i])
+    .filter((b) => b.type === "tool_use")
+    .map((b, i) => ({
+      id: b.id ?? `call_${i}`,
+      type: "function",
+      function: { name: b.name ?? "", arguments: b.args || "{}" },
+    }));
+
+  return {
+    choices: [
+      {
+        message: {
+          role: "assistant",
+          content: content || null,
+          tool_calls: toolCalls.length ? toolCalls : undefined,
+          reasoning_content: reasoning || undefined,
+        },
+        finish_reason: mapAnthropicStop(stopReason),
+      },
+    ],
+    usage: anthropicUsage({
+      input_tokens: uInput,
+      cache_read_input_tokens: uCacheRead,
+      cache_creation_input_tokens: uCacheCreate,
+      output_tokens: uOutput,
+    }),
+  };
+}
+
+const anthropicProvider: Provider = {
+  id: "anthropic",
+  resolveKey: anthropicKey,
+  chat: anthropicChat,
+  chatStream: anthropicStreamOnce,
+};
+
 const PROVIDERS: Partial<Record<ProviderId, Provider>> = {
   deepseek: deepseekProvider,
+  anthropic: anthropicProvider,
 };
 
 /** The Provider that serves a given model, via the registry. */
