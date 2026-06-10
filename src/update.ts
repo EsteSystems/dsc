@@ -5,6 +5,11 @@ import * as path from "node:path";
 import { VERSION } from "./version.js";
 
 const PACKAGE_NAME = "@este.systems/dsc";
+// npm is `npm.cmd` on Windows. Naming the binary per-platform lets us spawn it
+// directly without `shell: true` — which Node 22+ deprecates (DEP0190) when
+// combined with an args array, and which would otherwise leak a warning into
+// the TUI on /update.
+const NPM_BIN = process.platform === "win32" ? "npm.cmd" : "npm";
 const REGISTRY_URL = `https://registry.npmjs.org/${PACKAGE_NAME}/latest`;
 const CACHE_TTL_MS = 24 * 60 * 60 * 1000; // 24h — npm's once-a-day cadence
 
@@ -145,10 +150,7 @@ export interface UpdateResult {
  */
 export function runUpdate(signal?: AbortSignal): Promise<UpdateResult> {
   return new Promise<UpdateResult>((resolve) => {
-    // shell: true so Windows finds npm.cmd; on POSIX it's just `sh -c` which
-    // is harmless. Single quoted argv so spaces in package names don't bite.
-    const child = spawn("npm", ["install", "-g", `${PACKAGE_NAME}@latest`], {
-      shell: true,
+    const child = spawn(NPM_BIN, ["install", "-g", `${PACKAGE_NAME}@latest`], {
       stdio: ["ignore", "pipe", "pipe"],
       windowsHide: true,
     });
@@ -196,8 +198,7 @@ export async function setUserNpmPrefix(prefix?: string): Promise<string> {
   const target = prefix ?? path.join(homedir(), ".local");
   await fsp.mkdir(path.join(target, "bin"), { recursive: true });
   await fsp.mkdir(path.join(target, "lib"), { recursive: true });
-  const r = spawnSync("npm", ["config", "set", "prefix", target], {
-    shell: true,
+  const r = spawnSync(NPM_BIN, ["config", "set", "prefix", target], {
     stdio: ["ignore", "pipe", "pipe"],
     windowsHide: true,
   });
