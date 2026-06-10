@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- Test coverage for the two highest-risk previously-untested modules: the agent loop (`tests/agent.test.ts`, 23 tests) and the tool executors (`tests/tools.test.ts`, 44 tests). Total now 151 tests across 33 suites (was 84/21). The agent suite pins the loop invariants a silent regression would otherwise hide — `repairToolCallPairing` healing interrupted-turn tool-call/tool-message pairing, the throw→synthetic-error-result + remaining-call stub-fill path, abort→`interrupted`/rejected, the `MAX_TOOL_DEPTH` stop notice, and the `maxAutoContinue` budget-grant loop — plus the pure formatters (`estimateContextTokens`, `formatStatus`, `formatCost`). The tools suite covers every executor: `read_file` (line numbers, paging, directory/long-line handling), `write_file`/`edit_file` (create/overwrite/unique-vs-replace_all/rejection, `filesTouched`), `bash` (stdout + exit code, rejection, non-zero exit), `grep`/`glob` (matches + clean no-match), `web_fetch`/`web_search` validation paths (no network), the `task_*` store mutations, and the static schema/`READ_ONLY_TOOLS` surface. Suites stay hermetic — `DSC_NO_AUDIT=1`, `setAsker`-driven approvals, per-test store reset, temp dirs — and the `grep`-spawning cases skip on Windows where the binary isn't guaranteed.
+
+### Changed
+- `runAgent` gained an optional `chatStream` transport override on `RunOptions`, mirroring the existing `dispatchExtraTool`/`extraTools` injection points. Defaults to the real DeepSeek `chatStream`, so production behavior is unchanged; it lets tests drive the loop with scripted responses (no network) and lets an embedder swap the transport without touching the loop. `repairToolCallPairing` is now exported for direct testing (same pattern as `parseBlocks`/`autoRequiresApproval`/`expandEnv`).
+
 ## [1.1.1] - 2026-05-25
 
 ### Documentation

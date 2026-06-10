@@ -161,12 +161,18 @@ export interface RunOptions {
     name: string,
     args: Record<string, unknown>,
   ) => Promise<{ content: string; rejected?: boolean }>;
+  /** Override the chat transport. Defaults to the real DeepSeek `chatStream`.
+   *  Same injection style as `dispatchExtraTool`/`extraTools`: lets a test
+   *  drive the loop with scripted responses (no network), and lets an
+   *  embedder swap the transport without touching the loop. */
+  chatStream?: typeof chatStream;
 }
 
 export async function runAgent(opts: RunOptions): Promise<void> {
   const { messages, model, stats, toolCtx, signal, onTurn, events } = opts;
   const showReasoning = opts.showReasoning ?? true;
   const assistantLabel = opts.assistantLabel ?? "assistant:";
+  const callChat = opts.chatStream ?? chatStream;
 
   // Build the message list to send: drop any leading system entry the caller
   // may have stashed (e.g. from an older session) and prepend a freshly-built
@@ -211,7 +217,7 @@ export async function runAgent(opts: RunOptions): Promise<void> {
     const handlers = streamHandlers(spinner, showReasoning, assistantLabel, events, turnId);
     let resp;
     try {
-      resp = await chatStream({
+      resp = await callChat({
         model,
         messages: buildApi(),
         // Built-in tools first, MCP-provided tools appended. Order
@@ -425,7 +431,7 @@ function truncate(s: string, n: number): string {
  * 'tool_calls' must be followed by tool messages responding to each
  * 'tool_call_id'". This recovers transparently per call.
  */
-function repairToolCallPairing(messages: Message[]): Message[] {
+export function repairToolCallPairing(messages: Message[]): Message[] {
   const out: Message[] = [];
   for (let i = 0; i < messages.length; i++) {
     const m = messages[i];
