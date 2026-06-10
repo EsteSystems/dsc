@@ -7,6 +7,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.2.1] - 2026-06-11
+
+### Fixed
+- `/update` no longer leaks a Node `DEP0190` deprecation warning into the TUI. `runUpdate`/`setUserNpmPrefix` spawned `npm` with both an args array and `shell: true` — a combination Node 22+ deprecates (the args aren't shell-escaped, only concatenated). The `shell` was only there so Windows resolves `npm.cmd`; instead we now name the binary per-platform (`npm.cmd` on Windows, `npm` elsewhere) and spawn it directly with no shell — both warning-free and safe from arg-escaping issues. (`bash`'s executor is unaffected: it passes an empty args array, which doesn't trip DEP0190.)
+
 ## [1.2.0] - 2026-06-11
 
 ### Added
@@ -249,7 +254,8 @@ Initial public release.
 - DECSTBM-pinned status bar.
 - Cross-platform packaging (`npm pack` + per-OS installer scripts).
 
-[Unreleased]: https://github.com/EsteSystems/dsc/compare/v1.2.0...HEAD
+[Unreleased]: https://github.com/EsteSystems/dsc/compare/v1.2.1...HEAD
+[1.2.1]: https://github.com/EsteSystems/dsc/compare/v1.2.0...v1.2.1
 [1.2.0]: https://github.com/EsteSystems/dsc/compare/v1.1.1...v1.2.0
 [1.1.1]: https://github.com/EsteSystems/dsc/compare/v1.1.0...v1.1.1
 [1.1.0]: https://github.com/EsteSystems/dsc/compare/v1.0.0...v1.1.0
