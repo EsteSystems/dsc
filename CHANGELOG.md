@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.2.0] - 2026-06-11
+
 ### Added
 - `list_dir` tool — non-recursive directory listing (directories first with a `/` suffix, symlinks marked `@`, dotfiles included), defaulting to the cwd. Read-only (no approval) and cross-platform via `fs`, so the agent no longer spends an approval round-trip on `bash ls`/`dir` just to see what's in a directory; `glob` remains for recursive/pattern matching. `read_file`'s "that's a directory" hint now points at `list_dir`. Added to `TOOL_SCHEMAS`, `READ_ONLY_TOOLS`, the system-prompt tool list, and the README. 7 new tests; total 222.
 - `multi_edit` tool — apply a sequence of edits to a single file in one atomic call. Each edit is `{old_string, new_string, replace_all?}` applied in order (each sees the previous edit's result); if any edit fails to match — not found, or non-unique without `replace_all` — nothing is written, so the file is never left half-patched. One approval shows the cumulative diff (reusing the `edit_file` dialog). Cuts the tool-call count for multi-change refactors that previously needed N separate `edit_file` calls. Added to `TOOL_SCHEMAS`, the system-prompt tool list, and the README tool table; gated under its own `multi_edit` approval. 8 new tests; total 215.
@@ -247,7 +249,10 @@ Initial public release.
 - DECSTBM-pinned status bar.
 - Cross-platform packaging (`npm pack` + per-OS installer scripts).
 
-[Unreleased]: https://github.com/EsteSystems/dsc/compare/v1.0.1...HEAD
+[Unreleased]: https://github.com/EsteSystems/dsc/compare/v1.2.0...HEAD
+[1.2.0]: https://github.com/EsteSystems/dsc/compare/v1.1.1...v1.2.0
+[1.1.1]: https://github.com/EsteSystems/dsc/compare/v1.1.0...v1.1.1
+[1.1.0]: https://github.com/EsteSystems/dsc/compare/v1.0.0...v1.1.0
 [1.0.1]: https://github.com/EsteSystems/dsc/compare/v1.0.0...v1.0.1
 [1.0.0]: https://github.com/EsteSystems/dsc/compare/v0.6.0...v1.0.0
 [0.6.0]: https://github.com/EsteSystems/dsc/compare/v0.5.3...v0.6.0
