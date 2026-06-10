@@ -1,14 +1,55 @@
-export const API_URL = "https://api.deepseek.com/chat/completions";
+export const DEEPSEEK_API_URL = "https://api.deepseek.com/chat/completions";
 
-export const AVAILABLE_MODELS = ["deepseek-v4-pro", "deepseek-v4-flash"] as const;
-export type Model = (typeof AVAILABLE_MODELS)[number];
+export type ProviderId = "deepseek" | "anthropic" | "openai" | "ollama";
+
+export interface ModelRates {
+  /** USD per token. */
+  in_hit: number;
+  in_miss: number;
+  out: number;
+}
+
+export interface ModelSpec {
+  id: string;
+  provider: ProviderId;
+  rates: ModelRates;
+  contextWindow?: number;
+}
+
+// Registry of every model dsc knows. The active model is the routing key: its
+// `provider` selects the transport, the API key, and the cost table. Adding a
+// provider is two steps — register its models here, and register the Provider
+// in PROVIDERS below. v4-pro figures are discounted (valid through 2026-05-31).
+export const MODEL_REGISTRY: Record<string, ModelSpec> = {
+  "deepseek-v4-pro": {
+    id: "deepseek-v4-pro",
+    provider: "deepseek",
+    rates: { in_hit: 0.0034e-6, in_miss: 0.414e-6, out: 0.828e-6 },
+    contextWindow: 1_000_000,
+  },
+  "deepseek-v4-flash": {
+    id: "deepseek-v4-flash",
+    provider: "deepseek",
+    rates: { in_hit: 0.0028e-6, in_miss: 0.138e-6, out: 0.276e-6 },
+    contextWindow: 1_000_000,
+  },
+};
+
+// Model identity is a bare string (the provider is implied by the registry),
+// so session JSON stays compatible and `/model <name>` works across providers.
+export type Model = string;
 export const DEFAULT_MODEL: Model = "deepseek-v4-pro";
 
-// USD per token. v4-pro figures are discounted (valid through 2026-05-31), copied from godot-assistant.
-export const MODEL_RATES: Record<Model, { in_hit: number; in_miss: number; out: number }> = {
-  "deepseek-v4-pro":   { in_hit: 0.0034e-6, in_miss: 0.414e-6, out: 0.828e-6 },
-  "deepseek-v4-flash": { in_hit: 0.0028e-6, in_miss: 0.138e-6, out: 0.276e-6 },
-};
+/** Model ids dsc will offer. Phase 1 lists every registered model (all
+ *  DeepSeek today); provider-key availability filtering arrives with the
+ *  multi-provider config work. Order is registry insertion order. */
+export const AVAILABLE_MODELS: Model[] = Object.keys(MODEL_REGISTRY);
+
+/** Resolve a model id to its spec, falling back to the default for unknown
+ *  ids (mirrors history.ts's load-time model guard). */
+export function modelSpec(model: Model): ModelSpec {
+  return MODEL_REGISTRY[model] ?? MODEL_REGISTRY[DEFAULT_MODEL];
+}
 
 export type Role = "system" | "user" | "assistant" | "tool";
 
@@ -398,8 +439,81 @@ export async function saveSearchKey(
   return p;
 }
 
+// ---------------------------------------------------------------------------
+// Provider abstraction
+//
+// The agent loop speaks a normalized OpenAI-flavored shape (Message/ToolCall/
+// ChatResponse). A Provider translates that to/from a vendor's wire format.
+// DeepSeek, OpenAI, and Ollama are all OpenAI-compatible, so one factory
+// (openAICompatProvider) covers them with just a different URL + key. Anthropic
+// gets its own Provider (Messages API translation) in a later phase.
+// ---------------------------------------------------------------------------
+
+export interface Provider {
+  id: ProviderId;
+  /** Soft key lookup for availability checks; null when not configured. */
+  resolveKey: () => string | null;
+  chat: (opts: CallOptions, spec: ModelSpec) => Promise<ChatResponse>;
+  /** One streaming attempt. Retry/backoff lives in the top-level chatStream. */
+  chatStream: (opts: StreamOptions, spec: ModelSpec) => Promise<ChatResponse>;
+}
+
+interface OpenAICompatOptions {
+  id: ProviderId;
+  url: string;
+  resolveKey: () => string | null;
+  /** Throws a provider-specific, user-actionable error when no key is set. */
+  requireKey: () => string;
+}
+
+function openAICompatProvider(o: OpenAICompatOptions): Provider {
+  return {
+    id: o.id,
+    resolveKey: o.resolveKey,
+    chat: (opts) => openAICompatChat(o.url, o.requireKey(), opts),
+    chatStream: (opts) => openAICompatStreamOnce(o.url, o.requireKey(), opts),
+  };
+}
+
+const deepseekProvider = openAICompatProvider({
+  id: "deepseek",
+  url: DEEPSEEK_API_URL,
+  resolveKey: () => {
+    try {
+      return getApiKey();
+    } catch {
+      return null;
+    }
+  },
+  // getApiKey throws the existing "set DEEPSEEK_API_KEY / config" guidance.
+  requireKey: getApiKey,
+});
+
+const PROVIDERS: Partial<Record<ProviderId, Provider>> = {
+  deepseek: deepseekProvider,
+};
+
+/** The Provider that serves a given model, via the registry. */
+export function providerFor(model: Model): Provider {
+  const spec = modelSpec(model);
+  const p = PROVIDERS[spec.provider];
+  if (!p) {
+    throw new DeepSeekError(
+      `No provider registered for '${spec.provider}' (model '${model}')`,
+    );
+  }
+  return p;
+}
+
 export async function chat(opts: CallOptions): Promise<ChatResponse> {
-  const apiKey = getApiKey();
+  return providerFor(opts.model).chat(opts, modelSpec(opts.model));
+}
+
+async function openAICompatChat(
+  url: string,
+  apiKey: string,
+  opts: CallOptions,
+): Promise<ChatResponse> {
   const body: Record<string, unknown> = {
     model: opts.model,
     messages: opts.messages,
@@ -407,7 +521,7 @@ export async function chat(opts: CallOptions): Promise<ChatResponse> {
   };
   if (opts.tools && opts.tools.length) body.tools = opts.tools;
 
-  const res = await fetch(API_URL, {
+  const res = await fetch(url, {
     method: "POST",
     headers: {
       "Content-Type": "application/json",
@@ -473,9 +587,11 @@ function sleep(ms: number, signal?: AbortSignal): Promise<void> {
 }
 
 export async function chatStream(opts: StreamOptions): Promise<ChatResponse> {
+  const provider = providerFor(opts.model);
+  const spec = modelSpec(opts.model);
   for (let attempt = 1; ; attempt++) {
     try {
-      return await streamOnce(opts);
+      return await provider.chatStream(opts, spec);
     } catch (e) {
       if (isAbortError(e)) throw e;
       const transient =
@@ -493,8 +609,11 @@ export async function chatStream(opts: StreamOptions): Promise<ChatResponse> {
   }
 }
 
-async function streamOnce(opts: StreamOptions): Promise<ChatResponse> {
-  const apiKey = getApiKey();
+async function openAICompatStreamOnce(
+  url: string,
+  apiKey: string,
+  opts: StreamOptions,
+): Promise<ChatResponse> {
   const body: Record<string, unknown> = {
     model: opts.model,
     messages: opts.messages,
@@ -503,7 +622,7 @@ async function streamOnce(opts: StreamOptions): Promise<ChatResponse> {
   };
   if (opts.tools && opts.tools.length) body.tools = opts.tools;
 
-  const res = await fetch(API_URL, {
+  const res = await fetch(url, {
     method: "POST",
     headers: {
       "Content-Type": "application/json",
@@ -640,7 +759,7 @@ export function recordUsage(stats: Stats, usage: Usage | undefined): void {
 }
 
 export function computeCostUsd(stats: Stats, model: Model): number {
-  const rates = MODEL_RATES[model] ?? MODEL_RATES[DEFAULT_MODEL];
+  const rates = modelSpec(model).rates;
   const hit = stats.cache_hit_tokens;
   const miss = stats.cache_miss_tokens;
   const out = stats.completion_tokens;

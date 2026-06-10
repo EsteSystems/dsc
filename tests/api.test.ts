@@ -6,14 +6,18 @@ import * as os from "node:os";
 import {
   _resetConfigCachesForTests,
   apiKeySource,
+  AVAILABLE_MODELS,
   computeCostUsd,
   configPath,
   consumeConfigMigrationNotice,
+  DEFAULT_MODEL,
   getConfig,
   hasApiKey,
   legacyConfigPath,
   migrateLegacyConfigIfNeeded,
+  modelSpec,
   newStats,
+  providerFor,
   type Stats,
 } from "../src/api.js";
 
@@ -177,6 +181,34 @@ describe("apiKeySource / hasApiKey", () => {
     delete process.env.DEEPSEEK_API_KEY;
     assert.equal(apiKeySource(), null);
     assert.equal(hasApiKey(), false);
+  });
+});
+
+describe("model registry / provider routing", () => {
+  it("AVAILABLE_MODELS lists the DeepSeek models and includes the default", () => {
+    assert.ok(AVAILABLE_MODELS.includes("deepseek-v4-pro"));
+    assert.ok(AVAILABLE_MODELS.includes("deepseek-v4-flash"));
+    assert.ok(AVAILABLE_MODELS.includes(DEFAULT_MODEL));
+  });
+
+  it("modelSpec resolves a known model to its provider + rates", () => {
+    const spec = modelSpec("deepseek-v4-pro");
+    assert.equal(spec.provider, "deepseek");
+    assert.equal(spec.rates.out, 0.828e-6);
+  });
+
+  it("modelSpec falls back to the default for an unknown model id", () => {
+    const spec = modelSpec("totally-made-up-model");
+    assert.equal(spec.id, DEFAULT_MODEL);
+  });
+
+  it("providerFor routes DeepSeek models to the deepseek provider", () => {
+    assert.equal(providerFor("deepseek-v4-flash").id, "deepseek");
+  });
+
+  it("providerFor falls back to the default model's provider for unknown ids", () => {
+    // modelSpec() folds unknown ids to the default, so routing never dead-ends.
+    assert.equal(providerFor("nonexistent").id, "deepseek");
   });
 });
 
