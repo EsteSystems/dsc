@@ -25,7 +25,7 @@ import {
   type Model,
 } from "./api.js";
 import { loadInstructions } from "./instructions.js";
-import { readPreferences } from "./preferences.js";
+import { readPreferences, savePreferences } from "./preferences.js";
 import {
   callMCPTool,
   closeAll as closeMCP,
@@ -1022,9 +1022,10 @@ async function main() {
   }
   if (budgetUsd !== null) {
     info(
-      `warning: budget set to $${budgetUsd.toFixed(2)} (saved from a previous session). /budget off to clear, /budget <amount> to change.`,
+      `warning: budget set to ${budgetUsd.toFixed(2)} (saved from a previous session). /budget off to clear, /budget <amount> to change.`,
     );
   }
+
 
   // Connect any configured MCP servers in the background. We don't block
   // boot — the user can interact with built-in tools immediately, and
@@ -1067,6 +1068,17 @@ async function main() {
       return res.choices?.[0]?.message?.content ?? "";
     });
     info("memory: graph enabled (native, no Python subprocess)");
+  }
+
+  // One-time notice for upgraders who haven't enabled memory yet.
+  if (!memoryEnabled && !(savedPrefs as any).memoryNoticeShown) {
+    info(
+      "new: native memory graph — dsc can now store knowledge across sessions.\n" +
+        '  Add "memory": { "enabled": true } to ~/.config/dsc/config.json to activate.\n' +
+        "  If you were using the Python mcp-memory server, remove its block from\n" +
+        "  mcp.servers to avoid duplicate tools. (notice won't repeat)",
+    );
+    void (savePreferences as any)({ memoryNoticeShown: true }).catch(() => {});
   }
 
   // Fire-and-forget update probe. Uses the 24h cache by default so a

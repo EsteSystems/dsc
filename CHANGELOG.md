@@ -5,6 +5,11 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Added
+- **Native memory graph** (replaces the Python `mcp-memory` server). A SQLite-backed knowledge graph that extracts propositions from conversations, links them with typed edges (supports, contradicts, instantiates, analogizes, relates), and surfaces them automatically before every agent turn. Zero Python deps — everything runs in-process. Enable with `"memory": { "enabled": true }` in `~/.config/dsc/config.json`. The agent can also call `mcp_memory_*` tools directly (query, store, tensions, stats, decay, node detail). If you were running the Python `mcp-memory` server, remove its `mcp.servers.memory` block from config.json to avoid duplicate tools.
+
 ## [1.4.0] - 2026-06-13
 
 ### Added
