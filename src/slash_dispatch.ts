@@ -13,6 +13,7 @@ import {
   availableModels,
   computeCostUsd,
   configPath,
+  getCustomCommands,
   isKnownModel,
   modelAvailable,
   modelSpec,
@@ -101,6 +102,10 @@ export interface SlashContext {
   runEditor: (initial: string) => string | null;
   /** Quit the process cleanly (host clears timers etc). */
   exit: () => void;
+  /** Run a bash command and return its combined stdout+stderr output.
+   *  Used by custom slash commands; no approval gating (the user already
+   *  opted in by typing the slash). */
+  runBashCommand: (command: string) => Promise<string>;
 }
 
 const HELP_LINES = [
@@ -133,6 +138,10 @@ const HELP_LINES = [
   "/update                 check npm for a newer dsc and install it",
   "/edit [text]            open $EDITOR; the saved buffer becomes the next prompt",
   "/exit                   exit",
+  "",
+  "Define custom slash commands under \"commands\" in ~/.config/dsc/config.json:",
+  '  { "commands": { "build": "npm run build", "test": "npm test" } }',
+  "/build  → runs the command and prints output",
 ];
 
 function truncate(s: string, n: number): string {
@@ -814,8 +823,21 @@ export async function dispatchSlash(line: string, ctx: SlashContext): Promise<bo
       }
       return true;
     }
-    default:
+    default: {
+      // Check user-defined custom slash commands from config before giving up.
+      const custom = getCustomCommands();
+      if (custom && custom[cmd]) {
+        emit(`running: ${custom[cmd]}`);
+        try {
+          const out = await ctx.runBashCommand(custom[cmd]);
+          emit(out || "(no output)");
+        } catch (e) {
+          emit(`error: ${(e as Error).message}`);
+        }
+        return true;
+      }
       emit(`error: unknown command: /${cmd}`);
       return true;
+    }
   }
 }

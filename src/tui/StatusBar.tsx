@@ -1,6 +1,7 @@
 import React, { useEffect, useState } from "react";
 import { Box, Text, useStdout } from "ink";
 import { useStore } from "./useStore.js";
+import { modelSpec } from "../api.js";
 
 // Braille-block spinner — same shape Ora/cli-spinners use. Each entry is a
 // single column wide so it doesn't shift the status-bar layout per tick.
@@ -45,30 +46,77 @@ export function StatusBar() {
     s.cacheHitTokens > 0 || s.cacheMissTokens > 0
       ? ` (h:${formatCount(s.cacheHitTokens)} m:${formatCount(s.cacheMissTokens)})`
       : "";
-  const left =
-    `${s.model}${flags} · $${s.cost.toFixed(4)}  ` +
-    `▲${formatCount(s.inTokens)}${cache} ▼${formatCount(s.outTokens)}  ` +
-    `ctx:${formatCount(s.contextTokens)}` +
-    (s.queueDepth > 0 ? `  queued:${s.queueDepth}` : "");
+
+  const ctxWindow = modelSpec(s.model).contextWindow;
+  const ctxPct = ctxWindow ? Math.round((s.contextTokens / ctxWindow) * 100) : null;
+  const ctxLabel =
+    ctxWindow && ctxPct !== null
+      ? `ctx:${formatCount(s.contextTokens)}/${formatCount(ctxWindow)} (${ctxPct}%)`
+      : `ctx:${formatCount(s.contextTokens)}`;
+  // Color the ctx label when approaching the context window: yellow at 80%,
+  // red at 95%. The inverse background swaps fg/bg; these colors stay legible.
+  const ctxColor =
+    ctxPct !== null && ctxPct >= 95 ? "red"
+    : ctxPct !== null && ctxPct >= 80 ? "yellow"
+    : undefined;
+
+  const leftBeforeCtx =
+    `${s.model}${flags} · ${s.cost.toFixed(4)}  ` +
+    `▲${formatCount(s.inTokens)}${cache} ▼${formatCount(s.outTokens)}  `;
+  const afterCtx = s.queueDepth > 0 ? `  queued:${s.queueDepth}` : "";
+  const fullLeft = leftBeforeCtx + ctxLabel + afterCtx;
+
   const rightBody = s.busy
     ? s.task
       ? s.task
       : "thinking"
     : formatDuration(s.sessionSeconds);
-  // Spinner sits just before the right-side text when busy, taking one
-  // column. Padding math uses the visible length so the bar stays width-
-  // exact regardless of which spinner frame is current.
   const right = spinner ? `${spinner} ${rightBody}` : rightBody;
 
-  // Pad left + right to fill terminal width so the reverse-video block
-  // spans edge-to-edge without wrapping. The rendered line is framed by a
-  // single leading + trailing space, so subtract 2 from `width` to leave
-  // room for them.
+  // Pad left + right to fill terminal width. Framed by leading + trailing space.
   const inner = Math.max(0, width - 2);
   const rightLen = right.length;
+
+  if (ctxColor) {
+    // When ctx is at warning level, render it as a colored span inside the
+    // inverse bar. We recompute clipping so the ctx portion stays visible.
+    const leftMax = Math.max(0, inner - rightLen - 1);
+    let beforeClipped = leftBeforeCtx;
+    let ctxClipped = ctxLabel;
+    let afterClipped = afterCtx;
+    if (fullLeft.length > leftMax) {
+      // Clip the left side, keeping ctx as intact as possible
+      const overflow = fullLeft.length - leftMax;
+      if (overflow >= leftBeforeCtx.length) {
+        beforeClipped = leftBeforeCtx.slice(0, Math.max(0, leftBeforeCtx.length - overflow - 1)) + "…";
+      } else {
+        beforeClipped = leftBeforeCtx.slice(0, Math.max(0, leftBeforeCtx.length - overflow));
+      }
+      const remaining = leftMax - beforeClipped.length;
+      if (remaining < ctxLabel.length) {
+        ctxClipped = ctxLabel.slice(0, Math.max(0, remaining - 1)) + "…";
+      }
+      if (ctxClipped.length + beforeClipped.length < leftMax && afterCtx) {
+        afterClipped = afterCtx.slice(0, leftMax - beforeClipped.length - ctxClipped.length);
+      }
+    }
+    const padLen = Math.max(1, inner - beforeClipped.length - ctxClipped.length - afterClipped.length - rightLen);
+    return (
+      <Box>
+        <Text inverse>
+          {" "}{beforeClipped}
+          <Text color={ctxColor}>{ctxClipped}</Text>
+          {afterClipped}
+          {" ".repeat(padLen)}{right}{" "}
+        </Text>
+      </Box>
+    );
+  }
+
+  // No ctx warning — single-string render as before.
   const leftMax = Math.max(0, inner - rightLen - 1);
   const leftClipped =
-    left.length > leftMax ? left.slice(0, Math.max(0, leftMax - 1)) + "…" : left;
+    fullLeft.length > leftMax ? fullLeft.slice(0, Math.max(0, leftMax - 1)) + "…" : fullLeft;
   const padCount = Math.max(1, inner - leftClipped.length - rightLen);
   const line = ` ${leftClipped}${" ".repeat(padCount)}${right} `;
 

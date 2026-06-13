@@ -1,6 +1,6 @@
 import { describe, it } from "node:test";
 import assert from "node:assert/strict";
-import { parseBlocks } from "../src/tui/Markdown.js";
+import { parseBlocks, hasSyntax } from "../src/tui/Markdown.js";
 
 describe("parseBlocks", () => {
   it("identifies ATX headings with their level", () => {
@@ -97,5 +97,35 @@ describe("parseBlocks", () => {
       blocks.map((b) => b.kind),
       ["blank"],
     );
+  });
+});
+
+describe("hasSyntax", () => {
+  it("returns true for known languages", () => {
+    assert.equal(hasSyntax("ts"), true);
+    assert.equal(hasSyntax("python"), true);
+    assert.equal(hasSyntax("rust"), true);
+    assert.equal(hasSyntax("go"), true);
+    assert.equal(hasSyntax("bash"), true);
+    assert.equal(hasSyntax("sql"), true);
+    assert.equal(hasSyntax("yaml"), true);
+  });
+
+  it("resolves aliases", () => {
+    assert.equal(hasSyntax("js"), true);
+    assert.equal(hasSyntax("jsx"), true);
+    assert.equal(hasSyntax("tsx"), true);
+    assert.equal(hasSyntax("zsh"), true);
+  });
+
+  it("is case-insensitive", () => {
+    assert.equal(hasSyntax("TS"), true);
+    assert.equal(hasSyntax("TypeScript"), false); // not an alias
+  });
+
+  it("returns false for unknown languages", () => {
+    assert.equal(hasSyntax("lolcat"), false);
+    assert.equal(hasSyntax(""), false);
+    assert.equal(hasSyntax("plaintext"), false);
   });
 });

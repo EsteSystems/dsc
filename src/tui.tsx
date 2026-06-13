@@ -42,6 +42,7 @@ import * as approval from "./approval.js";
 import * as replHistory from "./repl_history.js";
 import { promises as fsp } from "node:fs";
 import { homedir } from "node:os";
+import { spawn } from "node:child_process";
 import * as path from "node:path";
 import { compactSession } from "./compact.js";
 import { formatVersionInfo } from "./version.js";
@@ -683,12 +684,90 @@ async function main() {
       clearInterval(timerId);
       process.exit(0);
     },
+    runBashCommand: (command) =>
+      new Promise<string>((resolve) => {
+        const child = spawn(command, [], {
+          cwd,
+          shell: true,
+          stdio: ["ignore", "pipe", "pipe"],
+          windowsHide: true,
+        });
+        let out = "";
+        child.stdout.on("data", (d) => (out += d.toString()));
+        child.stderr.on("data", (d) => (out += d.toString()));
+        child.on("close", () => {
+          const MAX = 16_000;
+          resolve(
+            out.length > MAX
+              ? out.slice(0, MAX) + `\n…(truncated, ${out.length - MAX} more chars)`
+              : out,
+          );
+        });
+        child.on("error", (e) => resolve(`error: ${e.message}`));
+      }),
   };
 
   // Returns true if the input was a recognized slash command and got handled
   // (or rejected) — caller should not forward it to the agent. Returns false
   // for non-slash input and unknown commands (caller decides what to do).
   const handleSlash = (line: string): Promise<boolean> => dispatchSlash(line, slashContext);
+
+  /** Scan `text` for `@path` (and `@path:line` / `@path:start-end`) references,
+   *  read each file, and prepend their contents to the prompt. References that
+   *  don't resolve to readable files are replaced with a one-line error note.
+   *  Returns the original text if no `@`-references were found. */
+  const resolveAtFiles = async (text: string): Promise<string> => {
+    const re = /(?:^|\s)@(\S+)/g;
+    const refs: { raw: string; path: string; start?: number; end?: number }[] = [];
+    for (const m of text.matchAll(re)) {
+      const raw = m[1];
+      const lm = raw.match(/^(.+?):(\d+)(?:-(\d+))?$/);
+      if (lm) {
+        refs.push({ raw, path: lm[1], start: Number(lm[2]), end: lm[3] ? Number(lm[3]) : undefined });
+      } else {
+        refs.push({ raw, path: raw });
+      }
+    }
+    if (refs.length === 0) return text;
+
+    const blocks: string[] = [];
+    for (const ref of refs) {
+      try {
+        const abs = path.resolve(cwd, ref.path);
+        const s = await fsp.stat(abs);
+        if (s.isDirectory()) {
+          blocks.push(`(skipped ${ref.path} — directory)`);
+          continue;
+        }
+        let content = await fsp.readFile(abs, "utf-8");
+        const totalLines = content.split("\n").length;
+        if (ref.start) {
+          const lines = content.split("\n");
+          if (ref.end) {
+            content = lines.slice(ref.start - 1, ref.end).join("\n");
+          } else {
+            content = lines.slice(ref.start - 1).join("\n");
+          }
+        }
+        const MAX = 50_000;
+        if (content.length > MAX) {
+          content = content.slice(0, MAX) + `\n…(truncated, ${content.length - MAX} more chars)`;
+        }
+        const range = ref.start ? ` lines ${ref.start}${ref.end ? `-${ref.end}` : "+"}` : "";
+        blocks.push(`File ${ref.path} (${totalLines} lines${range}):\n${content}`);
+      } catch {
+        blocks.push(`(could not read ${ref.path})`);
+      }
+    }
+    if (blocks.length === 0) return text;
+    // Strip @references from the original text
+    let clean = text;
+    for (const ref of refs) {
+      clean = clean.replace(new RegExp(`@${ref.raw.replace(/[.*+?^${}()|[\]\\]/g, "\\  const handleSubmit = (text: string) => {")}`, "g"), "");
+    }
+    clean = clean.trim().replace(/\s+/g, " ");
+    return blocks.join("\n\n") + "\n\n" + (clean ? `User: ${clean}` : "");
+  };
 
   const handleSubmit = (text: string) => {
     // Persist every submitted line — slash commands included, since
@@ -711,9 +790,11 @@ async function main() {
       void handleSlash(text);
       return;
     }
-    promptQueue.push(text);
-    syncStatus();
-    void drain();
+    void resolveAtFiles(text).then((resolved) => {
+      promptQueue.push(resolved);
+      syncStatus();
+      void drain();
+    });
   };
 
   const handleAbort = () => {
@@ -734,7 +815,8 @@ async function main() {
         `migrated config: copied ${migratedFromOneShot} → ${configPath()}\n`,
       );
     }
-    messages.push({ role: "user", content: cli.prompt });
+    const resolvedOneShot = await resolveAtFiles(cli.prompt);
+    messages.push({ role: "user", content: resolvedOneShot });
     pendingAbort = new AbortController();
     try {
       await runAgent({

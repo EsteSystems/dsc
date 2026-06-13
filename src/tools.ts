@@ -768,8 +768,20 @@ async function runBash(
       if (signal.aborted) onAbort();
       else signal.addEventListener("abort", onAbort, { once: true });
     }
-    child.stdout.on("data", (d) => (stdout += d.toString()));
-    child.stderr.on("data", (d) => (stderr += d.toString()));
+    // Stream output to the terminal in real time so long-running commands
+    // (builds, tests) show progress. Only when stderr is a TTY — headless
+    // serve.ts and piped stdout skip this so logs stay clean.
+    const streamToTerm = process.stderr.isTTY;
+    child.stdout.on("data", (d) => {
+      const s = d.toString();
+      stdout += s;
+      if (streamToTerm) process.stderr.write(s);
+    });
+    child.stderr.on("data", (d) => {
+      const s = d.toString();
+      stderr += s;
+      if (streamToTerm) process.stderr.write(s);
+    });
 
     const settle = (code: number | null) => {
       if (settled) return;

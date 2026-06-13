@@ -12,6 +12,62 @@ import { Box, Text } from "ink";
 // purpose-built parser also lets us memoize per-source so streaming
 // re-renders skip the parse when source hasn't changed.
 
+// ── Syntax highlighting tables ──────────────────────────────────────────
+// Compact keyword strings (split to Set at module-load time) + comment
+// styles. Unrecognised languages fall through to flat cyan.
+
+const KW_RAW: Record<string, string> = {
+  ts:  "const let var function return if else for while do class interface type enum namespace module import export from default async await try catch throw new extends implements typeof instanceof in of as keyof infer is true false null undefined void never any unknown string number boolean symbol bigint readonly abstract static public private protected break continue switch case yield",
+  py:  "def class return if elif else for while try except finally with as import from raise yield lambda pass break continue and or not in is True False None async await global nonlocal assert del",
+  sh:  "if then else elif fi for while do done in case esac function return local export alias unset source echo exit break continue eval exec shift read declare",
+  rs:  "fn let mut const return if else for while loop match impl struct enum trait type use mod pub crate self super where as in ref move async await true false Some None Ok Err unsafe extern static dyn box",
+  go:  "func return if else for range var const type struct interface map chan go select case default defer package import true false nil break continue fallthrough switch make new append len cap close delete panic recover",
+  java:"class interface enum extends implements package import public private protected static final abstract synchronized volatile transient native return if else for while do switch case default break continue throw try catch finally new this super true false null void int long float double boolean char byte short String",
+  c:   "if else for while do switch case default break continue return goto struct union enum typedef sizeof static extern const volatile register auto signed unsigned int char float double void long short true false NULL",
+  sql: "SELECT FROM WHERE JOIN LEFT RIGHT INNER OUTER ON AND OR NOT IN LIKE BETWEEN IS NULL AS ORDER BY GROUP HAVING LIMIT OFFSET INSERT INTO VALUES UPDATE SET DELETE CREATE TABLE ALTER DROP INDEX VIEW UNION ALL DISTINCT CASE WHEN THEN ELSE END EXISTS COUNT SUM AVG MIN MAX ASC DESC PRIMARY KEY FOREIGN REFERENCES CASCADE DEFAULT UNIQUE CONSTRAINT",
+};
+
+const KW: Record<string, Set<string>> = {};
+for (const [lang, s] of Object.entries(KW_RAW)) {
+  KW[lang] = new Set(s.split(/\s+/));
+}
+
+interface CommentStyle { lc?: string; bc?: [string, string] }
+const COMMENT: Record<string, CommentStyle> = {
+  ts: { lc: "//", bc: ["/*", "*/"] },
+  py: { lc: "#" },
+  sh: { lc: "#" },
+  rs: { lc: "//", bc: ["/*", "*/"] },
+  go: { lc: "//", bc: ["/*", "*/"] },
+  java:{ lc: "//", bc: ["/*", "*/"] },
+  c:   { lc: "//", bc: ["/*", "*/"] },
+  sql: { lc: "--", bc: ["/*", "*/"] },
+  yaml:{ lc: "#" },
+  css: { bc: ["/*", "*/"] },
+};
+
+const LANG_ALIAS: Record<string, string> = {
+  js: "ts", jsx: "ts", tsx: "ts", mjs: "ts", cjs: "ts",
+  bash: "sh", zsh: "sh",
+  cpp: "c", cc: "c", cxx: "c", hpp: "c", h: "c",
+  rb: "py", python: "py",
+  rust: "rs",
+  yml: "yaml",
+  scss: "css", less: "css",
+  kt: "java", kotlin: "java",
+  dockerfile: "sh", toml: "sh",
+};
+
+function resolveLang(lang: string): string | null {
+  const l = lang.toLowerCase();
+  const base = LANG_ALIAS[l] ?? l;
+  return KW[base] || COMMENT[base] ? base : null;
+}
+
+export function hasSyntax(lang: string): boolean {
+  return resolveLang(lang) !== null;
+}
+
 interface Props {
   source: string;
 }
@@ -163,6 +219,7 @@ function Block({ block }: { block: ParsedBlock }) {
     );
   }
   if (block.kind === "code") {
+    const langOk = hasSyntax(block.lang);
     return (
       <Box flexDirection="column" marginY={0}>
         {block.lang ? (
@@ -170,12 +227,19 @@ function Block({ block }: { block: ParsedBlock }) {
         ) : (
           <Text dimColor>```</Text>
         )}
-        {block.lines.map((l, i) => (
-          <Text key={i} color="cyan">
-            {"  "}
-            {l}
-          </Text>
-        ))}
+        {langOk
+          ? block.lines.map((l, i) => (
+              <Text key={i}>
+                {"  "}
+                {highlightLine(l, resolveLang(block.lang)!)}
+              </Text>
+            ))
+          : block.lines.map((l, i) => (
+              <Text key={i} color="cyan">
+                {"  "}
+                {l}
+              </Text>
+            ))}
         <Text dimColor>```</Text>
       </Box>
     );
@@ -261,6 +325,107 @@ function Block({ block }: { block: ParsedBlock }) {
     </Box>
   );
 }
+
+// ── Syntax highlighting ─────────────────────────────────────────────────
+
+/** Scan `line` and return styled spans for the given language's tokens.
+ *  Unrecognised languages never reach here (caller checks hasSyntax first).
+ *  Uses a single left-to-right pass with a plain-text buffer: keywords
+ *  (blue bold), numbers (yellow), strings (green), comments (dim italic). */
+function highlightLine(line: string, lang: string): React.ReactNode[] {
+  const kw = KW[lang];
+  const cmt = COMMENT[lang] ?? {};
+  const lc = cmt.lc;
+  const [bo, bc] = cmt.bc ?? [];
+
+  const out: React.ReactNode[] = [];
+  let plain = "";
+  const flush = () => { if (plain) { out.push(plain); plain = ""; } };
+
+  let i = 0;
+  while (i < line.length) {
+    // Line comment — consume rest of line
+    if (lc && line.startsWith(lc, i)) {
+      flush();
+      out.push(<Text key={out.length} dimColor italic>{line.slice(i)}</Text>);
+      return out;
+    }
+    // Block comment
+    if (bo && bc && line.startsWith(bo, i)) {
+      const end = line.indexOf(bc, i + bo.length);
+      if (end !== -1) {
+        flush();
+        out.push(<Text key={out.length} dimColor italic>{line.slice(i, end + bc.length)}</Text>);
+        i = end + bc.length;
+        continue;
+      }
+    }
+    // String: "..." or '...'
+    if (line[i] === '"' || line[i] === "'") {
+      const end = findQuoteEnd(line, i, line[i]);
+      if (end !== -1) {
+        flush();
+        out.push(<Text key={out.length} color="green">{line.slice(i, end + 1)}</Text>);
+        i = end + 1;
+        continue;
+      }
+    }
+    // Template literal: `...`
+    if (line[i] === '`') {
+      let j = i + 1;
+      while (j < line.length) {
+        if (line[j] === '\\') { j += 2; continue; }
+        if (line[j] === '`') break;
+        j++;
+      }
+      if (j < line.length) {
+        flush();
+        out.push(<Text key={out.length} color="green">{line.slice(i, j + 1)}</Text>);
+        i = j + 1;
+        continue;
+      }
+    }
+    // Number (must start on a word boundary — not mid-identifier like foo123)
+    if (i === 0 || !/\w/.test(line[i - 1])) {
+      const m = line.slice(i).match(/^(0[xX][0-9a-fA-F]+|0[bB][01]+|0[oO][0-7]+|\d+\.?\d*(?:[eE][+-]?\d+)?)/);
+      if (m) {
+        flush();
+        out.push(<Text key={out.length} color="yellow">{m[0]}</Text>);
+        i += m[0].length;
+        continue;
+      }
+    }
+    // Keyword (must start on a word boundary)
+    if (kw && (i === 0 || !/\w/.test(line[i - 1]))) {
+      const m = line.slice(i).match(/^[a-zA-Z_]\w*/);
+      if (m && kw.has(m[0])) {
+        flush();
+        out.push(<Text key={out.length} color="blue" bold>{m[0]}</Text>);
+        i += m[0].length;
+        continue;
+      }
+    }
+    // Plain character
+    plain += line[i];
+    i++;
+  }
+  flush();
+  return out;
+}
+
+/** Find the closing quote for a string starting at `start` with `quote`,
+ *  skipping backslash-escaped characters. Returns -1 if unclosed. */
+function findQuoteEnd(line: string, start: number, quote: string): number {
+  let j = start + 1;
+  while (j < line.length) {
+    if (line[j] === '\\') { j += 2; continue; }
+    if (line[j] === quote) return j;
+    j++;
+  }
+  return -1;
+}
+
+// ── Inline markdown parser ──────────────────────────────────────────────
 
 // Inline span parser: scans the string left-to-right and emits styled spans
 // for **bold**, *italic*, `code`, [text](url). The unambiguous markers are

@@ -251,6 +251,21 @@ export function getConfig(): Record<string, unknown> | null {
   return _cachedConfig;
 }
 
+/** Return user-defined slash commands from config, e.g.
+ *  `{ "build": "npm run build", "test": "npm test" }`.  Returns null when
+ *  no commands are defined. */
+export function getCustomCommands(): Record<string, string> | null {
+  const cfg = getConfig();
+  if (!cfg) return null;
+  const cmds = cfg.commands;
+  if (!cmds || typeof cmds !== "object") return null;
+  const out: Record<string, string> = {};
+  for (const [k, v] of Object.entries(cmds as Record<string, unknown>)) {
+    if (typeof v === "string" && v.length > 0) out[k] = v;
+  }
+  return Object.keys(out).length > 0 ? out : null;
+}
+
 function readKeyFromFile(): string | null {
   const obj = getConfig();
   if (!obj) return null;
