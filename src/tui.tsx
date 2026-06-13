@@ -13,9 +13,11 @@ import {
   availableModels,
   DEFAULT_MODEL,
   DeepSeekError,
+  chat,
   computeCostUsd,
   configPath,
   consumeConfigMigrationNotice,
+  getConfig,
   hasApiKey,
   isKnownModel,
   recordUsage,
@@ -50,6 +52,8 @@ import { openEditor } from "./editor.js";
 import { checkForUpdate } from "./update.js";
 import { dispatchSlash, type SlashContext } from "./slash_dispatch.js";
 import { ProjectContext } from "./context.js";
+import * as memory from "./memory/index.js";
+import { MEMORY_TOOL_SCHEMAS, dispatchMemoryTool } from "./memory/tools.js";
 
 /** Parse a numbered task list from the agent's response. Returns empty array
  *  if no clear plan structure was found. */
@@ -233,11 +237,16 @@ async function main() {
   // in the config this is just an empty array — no network, no cost.
   let mcpConnections: MCPConnection[] = [];
   const mcpExtraTools = (): import("./api.js").ToolSchema[] =>
-    mcpConnections.flatMap((c) => c.tools);
-  const mcpDispatch = (name: string, args: Record<string, unknown>) =>
-    callMCPTool(mcpConnections, name, args, {
+    mcpConnections.flatMap((c) => c.tools)
+      .concat(memoryEnabled ? MEMORY_TOOL_SCHEMAS : []);
+  const mcpDispatch = (name: string, args: Record<string, unknown>) => {
+    if (memoryEnabled && name.startsWith("mcp_memory_")) {
+      return dispatchMemoryTool(name, args);
+    }
+    return callMCPTool(mcpConnections, name, args, {
       sessionApprovals: toolCtx.sessionApprovals,
     });
+  };
 
   // Project-context index: chunks AGENTS.md, README.md, etc. and
   // injects relevant paragraphs before each agent turn.  Re-indexed
@@ -486,11 +495,14 @@ async function main() {
     // README.md, and recently-touched files).  The history shows the
     // original user text; the model sees context-enriched.
     const ctxSnippets = projectCtx.search(userText);
+    const memCtx = memory.autoQueryContext(userText);
     const enhancedText =
-      ctxSnippets.length > 0
-        ? "Relevant project context:\n\n" +
-          ctxSnippets.join("\n\n") +
-          "\n\n---\nUser: " +
+      ctxSnippets.length > 0 || memCtx
+        ? (ctxSnippets.length > 0
+            ? "Relevant project context:\n\n" + ctxSnippets.join("\n\n") + "\n\n"
+            : "") +
+          (memCtx ? memCtx + "\n\n" : "") +
+          "---\nUser: " +
           userText
         : userText;
 
@@ -546,6 +558,17 @@ async function main() {
     // Index any files the agent touched this turn for future context queries.
     for (const f of toolCtx.filesTouched) {
       await projectCtx.addFile(cwd, f);
+    }
+    // Store the agent's last response as memory propositions (fire-and-forget).
+    if (memoryEnabled) {
+      const lastAssistant = [...messages]
+        .reverse()
+        .find((m) => m.role === "assistant");
+      if (lastAssistant?.content) {
+        memory
+          .storePropositions(lastAssistant.content, session.id + "-assistant")
+          .catch(() => {});
+      }
     }
   };
 
@@ -1025,6 +1048,26 @@ async function main() {
       info(`error: mcp connect failed: ${(e as Error).message}`);
     }
   })();
+
+  // Native memory graph (replaces the Python mcp-memory server).
+  // Enabled via `"memory": { "enabled": true }` in config.json.
+  const memConfig = getConfig();
+  const memoryEnabled = !!(memConfig && typeof memConfig === "object" &&
+    (memConfig as any).memory && (memConfig as any).memory.enabled);
+  if (memoryEnabled) {
+    memory.setEnabled(true);
+    memory.setModel(model);
+    // Shim the non-streaming chat for proposition extraction and
+    // relationship classification (background, not on the critical path).
+    memory.setApiCall(async (m, msgs, _maxTokens) => {
+      const res = await chat({
+        model: m,
+        messages: msgs as any,
+      });
+      return res.choices?.[0]?.message?.content ?? "";
+    });
+    info("memory: graph enabled (native, no Python subprocess)");
+  }
 
   // Fire-and-forget update probe. Uses the 24h cache by default so a
   // chatty notice doesn't appear on every launch — only once per day,
