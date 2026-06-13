@@ -31,6 +31,17 @@ export interface AgentTask {
   activeForm?: string;
 }
 
+export interface PlanTask {
+  id: number;
+  text: string;
+  done: boolean;
+}
+
+export interface PlanState {
+  title: string;
+  tasks: PlanTask[];
+}
+
 export interface StoreState {
   // Finalized turns. Pushed into <Static> so they live in scrollback.
   history: UIMessage[];
@@ -67,6 +78,10 @@ export interface StoreState {
   queue: string[];
   queueDepth: number;
   busy: boolean;
+  /** Active /plan session. null when no plan is in progress. */
+  plan: PlanState | null;
+  /** Title stashed while waiting for the agent to produce a plan. */
+  planRequestTitle: string | null;
 }
 
 let state: StoreState = {
@@ -92,6 +107,8 @@ let state: StoreState = {
   queue: [],
   queueDepth: 0,
   busy: false,
+  plan: null,
+  planRequestTitle: null,
 };
 
 type Listener = () => void;

@@ -50,6 +50,25 @@ import { openEditor } from "./editor.js";
 import { checkForUpdate } from "./update.js";
 import { dispatchSlash, type SlashContext } from "./slash_dispatch.js";
 
+/** Parse a numbered task list from the agent's response. Returns empty array
+ *  if no clear plan structure was found. */
+function parsePlanTasks(text: string): { id: number; text: string; done: boolean }[] {
+  const tasks: { id: number; text: string; done: boolean }[] = [];
+  for (const line of text.split("\n")) {
+    const m = line.match(/^\s*(\d+)[.)]\s+(.+)/);
+    if (m) {
+      tasks.push({ id: parseInt(m[1], 10), text: m[2].trim(), done: false });
+    }
+  }
+  // Only accept if the tasks are sequential (1, 2, 3, ...) — guards against
+  // the agent casually writing "1. something" mid-paragraph.
+  if (tasks.length < 2) return [];
+  for (let i = 0; i < tasks.length; i++) {
+    if (tasks[i].id !== i + 1) return [];
+  }
+  return tasks;
+}
+
 // Auto-compact threshold (token-count of estimated context). Default
 // 50K — well below the 1M model limit, but tuned to keep per-turn input
 // cost from creeping. Override via DSC_AUTO_COMPACT_AT; set to "0" /
@@ -519,6 +538,21 @@ async function main() {
         const next = promptQueue.shift()!;
         syncStatus();
         await runTurn(next);
+        // If the user requested a plan, try to parse the last assistant message
+        const pt = getState().planRequestTitle;
+        if (pt) {
+          const last = [...messages].reverse().find(
+            (m) => m.role === "assistant" && typeof m.content === "string",
+          );
+          if (last && typeof last.content === "string") {
+            const tasks = parsePlanTasks(last.content);
+            if (tasks.length > 0) {
+              setState({ plan: { title: pt, tasks }, planRequestTitle: null });
+            } else {
+              setState({ planRequestTitle: null });
+            }
+          }
+        }
         if (AUTO_COMPACT_AT_TOKENS > 0) {
           const ctx = estimateContextTokens(messages);
           if (ctx > AUTO_COMPACT_AT_TOKENS) {
@@ -663,9 +697,9 @@ async function main() {
             tool_call_id: m.tool_call_id,
           });
         }
-        setState({ history: restored, current: null, model });
+        setState({ history: restored, current: null, model, plan: null });
       } else {
-        setState({ history: [], current: null, model });
+        setState({ history: [], current: null, model, plan: null });
       }
       syncStatus();
     },
@@ -684,6 +718,8 @@ async function main() {
       clearInterval(timerId);
       process.exit(0);
     },
+    getPlan: () => getState().plan,
+    setPlan: (p) => setState({ plan: p }),
     runBashCommand: (command) =>
       new Promise<string>((resolve) => {
         const child = spawn(command, [], {

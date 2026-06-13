@@ -7,6 +7,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- **`/plan` mode** — type `/plan add auth middleware` and the agent creates a step-by-step task list. Use `/plan:show` to view progress, `/plan:go` to execute the next pending task, `/plan:done` to mark it complete, `/plan:skip [n]` to skip, `/plan:clear` to discard. A compact progress line (`plan: add auth  [✓✓◌✗] 2/4 (50%)`) sits above the prompt. The plan persists across turns but is session-scoped (reset on `/clear`).
+
 ## [1.3.0] - 2026-06-13
 
 ### Added

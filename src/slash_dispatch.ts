@@ -40,7 +40,7 @@ import * as history from "./history.js";
 import type { SessionState } from "./history.js";
 import * as approval from "./approval.js";
 import * as audit from "./audit.js";
-import { getState, setState } from "./store.js";
+import { getState, setState, type PlanState } from "./store.js";
 import { formatVersionInfo } from "./version.js";
 import {
   addLocalBinToShellRc,
@@ -102,6 +102,9 @@ export interface SlashContext {
   runEditor: (initial: string) => string | null;
   /** Quit the process cleanly (host clears timers etc). */
   exit: () => void;
+  /** Active /plan session — null when no plan is in progress. */
+  getPlan: () => PlanState | null;
+  setPlan: (p: PlanState | null) => void;
   /** Run a bash command and return its combined stdout+stderr output.
    *  Used by custom slash commands; no approval gating (the user already
    *  opted in by typing the slash). */
@@ -138,6 +141,12 @@ const HELP_LINES = [
   "/update                 check npm for a newer dsc and install it",
   "/edit [text]            open $EDITOR; the saved buffer becomes the next prompt",
   "/exit                   exit",
+  "/plan <description>     create a step-by-step plan; /plan:go to execute",
+  "/plan:show              show current plan and progress",
+  "/plan:go                execute the next pending plan task",
+  "/plan:done              mark the current plan task complete",
+  "/plan:skip [n]          skip a plan task",
+  "/plan:clear             discard the active plan",
   "",
   "Define custom slash commands under \"commands\" in ~/.config/dsc/config.json:",
   '  { "commands": { "build": "npm run build", "test": "npm test" } }',
@@ -821,6 +830,96 @@ export async function dispatchSlash(line: string, ctx: SlashContext): Promise<bo
       } else {
         ctx.submit(draft);
       }
+      return true;
+    }
+
+    // ── /plan family ───────────────────────────────────────────────────
+
+    case "plan": {
+      const desc = arg.trim();
+      if (!desc) {
+        emit("usage: /plan <description> — create a step-by-step plan");
+        emit("  /plan:show  — display current plan");
+        emit("  /plan:go    — execute next pending task");
+        emit("  /plan:done  — mark current task complete + go next");
+        emit("  /plan:skip [n] — skip task N (defaults to current)");
+        emit("  /plan:clear — discard the plan");
+        return true;
+      }
+      setState({ planRequestTitle: desc });
+      ctx.submit(
+        `Create a step-by-step implementation plan for: ${desc}.\n` +
+          "Output a numbered list, one concrete task per line.\n" +
+          "Format exactly:\n" +
+          "1. First task description\n" +
+          "2. Second task description\n" +
+          "Output NOTHING else besides the numbered list.",
+      );
+      emit("generating plan…");
+      return true;
+    }
+
+    case "plan:show": {
+      const plan = ctx.getPlan();
+      if (!plan) { emit("no active plan. use /plan <description> to create one."); return true; }
+      const lines: string[] = [];
+      lines.push(`plan: ${plan.title} (${plan.tasks.filter(t => t.done).length}/${plan.tasks.length} done)`);
+      for (const t of plan.tasks) {
+        const mark = t.done ? "✓" : "◌";
+        lines.push(`  ${mark} ${t.id}. ${t.text}`);
+      }
+      emit(lines.join("\n"));
+      return true;
+    }
+
+    case "plan:go": {
+      const plan = ctx.getPlan();
+      if (!plan) { emit("no active plan. use /plan <description> to create one."); return true; }
+      const next = plan.tasks.find(t => !t.done);
+      if (!next) { emit("all tasks complete."); return true; }
+      ctx.submit(
+        `Execute task ${next.id}/${plan.tasks.length} of the plan "${plan.title}":\n` +
+          `"${next.text}"\n` +
+          "Execute ONLY this task. Report what you did when done.",
+      );
+      return true;
+    }
+
+    case "plan:done": {
+      const plan = ctx.getPlan();
+      if (!plan) { emit("no active plan."); return true; }
+      const cur = plan.tasks.find(t => !t.done);
+      if (!cur) { emit("all tasks already complete."); return true; }
+      cur.done = true;
+      ctx.setPlan({ ...plan, tasks: [...plan.tasks] });
+      const remaining = plan.tasks.filter(t => !t.done);
+      if (remaining.length === 0) {
+        emit("all tasks complete.");
+      } else {
+        emit(`task ${cur.id} marked done. ${remaining.length} remaining. /plan:go for next.`);
+      }
+      return true;
+    }
+
+    case "plan:skip": {
+      const plan = ctx.getPlan();
+      if (!plan) { emit("no active plan."); return true; }
+      const n = arg.trim() ? parseInt(arg.trim(), 10) : plan.tasks.find(t => !t.done)?.id;
+      if (!n || !plan.tasks.find(t => t.id === n)) {
+        emit(`task ${n ?? "?"} not found. use /plan:show to see task numbers.`);
+        return true;
+      }
+      const task = plan.tasks.find(t => t.id === n)!;
+      task.done = true;
+      ctx.setPlan({ ...plan, tasks: [...plan.tasks] });
+      emit(`skipped task ${n}: ${task.text}`);
+      return true;
+    }
+
+    case "plan:clear": {
+      ctx.setPlan(null);
+      setState({ planRequestTitle: null });
+      emit("plan discarded.");
       return true;
     }
     default: {
