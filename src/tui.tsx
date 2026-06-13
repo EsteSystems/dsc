@@ -47,6 +47,8 @@ import { homedir } from "node:os";
 import { spawn } from "node:child_process";
 import * as path from "node:path";
 import { compactSession } from "./compact.js";
+import { resolveAtImages } from "./images.js";
+import type { ImageBlock } from "./images.js";
 import { formatVersionInfo } from "./version.js";
 import { openEditor } from "./editor.js";
 import { checkForUpdate } from "./update.js";
@@ -287,6 +289,7 @@ async function main() {
   let budgetUsd: number | null = savedPrefs.budgetUsd ?? null;
   let budgetWarned = false;
   const promptQueue: string[] = [];
+  const promptImages = new Map<string, ImageBlock[]>();
 
   // Push the freshly-computed numbers into the store; StatusBar reads from
   // there. Called after every onTurn and once per second for the timer.
@@ -515,7 +518,8 @@ async function main() {
       ],
       busy: true,
     }));
-    messages.push({ role: "user", content: enhancedText });
+    messages.push({ role: "user", content: enhancedText, ...(promptImages.has(userText) ? { images: promptImages.get(userText) } : {}) });
+    promptImages.delete(userText);
     pendingAbort = new AbortController();
     try {
       await runAgent({
@@ -872,8 +876,10 @@ async function main() {
       void handleSlash(text);
       return;
     }
-    void resolveAtFiles(text).then((resolved) => {
+    void resolveAtImages(text, cwd).then(async ({ text: cleanText, images }) => {
+      const resolved = await resolveAtFiles(cleanText);
       promptQueue.push(resolved);
+      if (images.length > 0) promptImages.set(resolved, images);
       syncStatus();
       void drain();
     });
@@ -897,8 +903,9 @@ async function main() {
         `migrated config: copied ${migratedFromOneShot} → ${configPath()}\n`,
       );
     }
-    const resolvedOneShot = await resolveAtFiles(cli.prompt);
-    messages.push({ role: "user", content: resolvedOneShot });
+    const { text: cleanOneShot, images: imgOneShot } = await resolveAtImages(cli.prompt, cwd);
+    const resolvedOneShot = await resolveAtFiles(cleanOneShot);
+    messages.push({ role: "user", content: resolvedOneShot, ...(imgOneShot.length ? { images: imgOneShot } : {}) });
     pendingAbort = new AbortController();
     try {
       await runAgent({

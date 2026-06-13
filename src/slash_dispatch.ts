@@ -54,6 +54,7 @@ import { copyToClipboard } from "./clipboard.js";
 import type { MCPConnection } from "./mcp.js";
 import type { ToolContext } from "./tools.js";
 import { formatRelative } from "./history.js";
+import { runDelegate } from "./delegate.js";
 import { promises as fsp } from "node:fs";
 import * as path from "node:path";
 
@@ -117,6 +118,8 @@ const HELP_LINES = [
   "/list                   list sessions for this cwd",
   "/resume [n|name|id]     resume a session",
   "/save <name>            name the current session",
+  "/fork [name]             fork the current session into a new branch",
+  "/delegate <prompt>       spawn a read-only sub-agent to investigate",
   "/rename <text>          set assistant label for this session",
   "/model [name]           show available models or switch (routes to its provider)",
   "/yolo                   toggle approval mode",
@@ -194,10 +197,38 @@ export async function dispatchSlash(line: string, ctx: SlashContext): Promise<bo
             .map((s, i) => {
               const here = s.id === activeId ? "* " : "  ";
               const label = s.name ? `${s.name} (${s.model})` : s.model;
-              return `${here}${String(i + 1).padStart(2, " ")}. ${label}  ${formatRelative(s.updated_at)}  (${s.message_count} msgs)  ${s.first_user_message || "—"}`;
+              const fork = s.forked_from ? " ← fork" : "";
+              return `${here}${String(i + 1).padStart(2, " ")}. ${label}${fork}  ${formatRelative(s.updated_at)}  (${s.message_count} msgs)  ${s.first_user_message || "—"}`;
             })
             .join("\n"),
         );
+      }
+      return true;
+    }
+    case "fork": {
+      const parent = ctx.getSession();
+      const forkName = arg.trim() || undefined;
+      try {
+        const child = await history.forkSession(parent, forkName);
+        ctx.applySession(child, { rebuildView: false });
+        emit(`forked → ${child.id}${forkName ? ` (${forkName})` : ""} from ${parent.id}`);
+      } catch (e: any) {
+        emit(`error: fork failed: ${e.message}`);
+      }
+      return true;
+    }
+    case "delegate": {
+      const prompt = arg.trim();
+      if (!prompt) {
+        emit("usage: /delegate <prompt> — spawn a read-only sub-agent to investigate");
+        return true;
+      }
+      emit("delegating…");
+      try {
+        const result = await runDelegate(prompt, ctx.cwd, ctx.getModel());
+        emit(result.content);
+      } catch (e: any) {
+        emit(`error: delegate failed: ${e.message}`);
       }
       return true;
     }

@@ -43,6 +43,8 @@ export interface SessionMeta {
   first_user_message: string;
   /** User-assigned name (via /save). Optional; resume can use it as an alias. */
   name?: string;
+  /** Session id this was forked from, if any. */
+  forked_from?: string;
 }
 
 interface SessionFileV2 {
@@ -66,6 +68,8 @@ interface SessionFileV2 {
    *  (e.g. "en", "ro", "Romanian", "formal English"). The model is told
    *  to reply exclusively in this language. */
   language?: string;
+  /** Session id this was forked from. */
+  forked_from?: string;
 }
 
 export interface CompactionState {
@@ -99,6 +103,8 @@ export interface SessionState {
   assistantLabel?: string;
   /** Force replies in a specific language (free-form). */
   language?: string;
+  /** Session id this was forked from. */
+  forked_from?: string;
 }
 
 function newSessionId(): string {
@@ -167,6 +173,7 @@ export async function saveSession(state: SessionState): Promise<void> {
     ...(state.name ? { name: state.name } : {}),
     ...(state.assistantLabel ? { assistantLabel: state.assistantLabel } : {}),
     ...(state.language ? { language: state.language } : {}),
+    ...(state.forked_from ? { forked_from: state.forked_from } : {}),
   };
   const tmp = file + ".tmp";
   await fs.writeFile(tmp, JSON.stringify(data, null, 2), "utf8");
@@ -201,6 +208,7 @@ export async function loadSession(id: string): Promise<SessionState | null> {
     name: data.name,
     assistantLabel: data.assistantLabel,
     language: data.language,
+    forked_from: data.forked_from,
   };
 }
 
@@ -240,10 +248,36 @@ export async function listSessions(cwd?: string): Promise<SessionMeta[]> {
       first_user_message:
         typeof firstUser?.content === "string" ? firstUser.content.slice(0, 80) : "",
       name: data.name,
+      forked_from: data.forked_from,
     });
   }
   out.sort((a, b) => b.updated_at - a.updated_at);
   return out;
+}
+
+/**
+ * Fork a session: deep-copy messages into a new session linked to the parent.
+ * The fork gets its own id, created_at timestamp, and forked_from pointer.
+ * Messages are cloned (not referenced) so independent compaction works.
+ */
+export async function forkSession(
+  parent: SessionState,
+  forkName?: string,
+): Promise<SessionState> {
+  const child: SessionState = {
+    id: newSessionId(),
+    cwd: parent.cwd,
+    model: parent.model,
+    messages: structuredClone(parent.messages),
+    stats: { ...parent.stats },
+    created_at: Date.now(),
+    compaction: parent.compaction ? { ...parent.compaction } : undefined,
+    archivedMessages: parent.archivedMessages ? [...parent.archivedMessages] : undefined,
+    name: forkName,
+    forked_from: parent.id,
+  };
+  await saveSession(child);
+  return child;
 }
 
 export async function mostRecentForCwd(cwd: string): Promise<SessionMeta | null> {

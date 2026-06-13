@@ -7,6 +7,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- **dsc serve — HTTP API** alongside the existing WebSocket server. `POST /chat` with SSE streaming, `GET /health`, `GET /session/:id`. Token auth via `DSC_SERVE_TOKEN` env var or `serve.token` in config.json. Sessions persist to disk (SQLite) across client disconnects. Full slash command dispatch wired in serve mode.
+- **Image attachment support** (`@img:`) — paste `@img:screenshot.png` in a prompt to send the image as a base64-encoded vision block to Anthropic Claude. PNG, JPEG, GIF, WebP, BMP supported (5 MB cap). Non-Anthropic models leave the reference as-is.
+- **MCP resource support** — on connect, dsc now discovers each MCP server's resources and exposes them via `mcp_<server>_resource_read` tools. The agent can browse server-provided file trees without `bash`.
+- **Git tools** — two native tools: `git_diff(staged?)` and `git_commit(message)`. Run git operations without approval round-trips. Diff output capped at 20K chars.
+- **Session forking** (`/fork [name]`) — deep-copies the current session (messages, compaction, stats) into a new session linked via `forked_from`. Forks appear with `← fork` in `/list`. Explore alternatives without losing your place.
+- **Agent delegation** (`/delegate <prompt>`) — spawns a read-only sub-agent (read_file, grep, glob, list_dir, git_diff only) that investigates independently and returns a structured report. No approvals, 2-minute timeout.
+
+### Changed
+- `AnthropicBlock` type extended with `image` block support for Claude vision.
+- `Message` interface gains optional `images` field for pre-encoded vision payloads.
+- `SessionMeta` / `SessionFileV2` / `SessionState` gain optional `forked_from` field.
+- `/list` now shows `← fork` for sessions created via `/fork`.
+
 ## [1.5.0] - 2026-06-13
 
 ### Added

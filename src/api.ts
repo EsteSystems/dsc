@@ -76,6 +76,9 @@ export interface Message {
   tool_calls?: ToolCall[];
   tool_call_id?: string;
   reasoning_content?: string;
+  /** Pre-encoded images (data URIs) for vision-capable models.
+   *  Set by the @img: resolver; consumed by toAnthropic(). */
+  images?: Array<{ media_type: string; data: string }>;
 }
 
 export interface ToolSchema {
@@ -642,7 +645,8 @@ function requireAnthropicKey(): string {
 type AnthropicBlock =
   | { type: "text"; text: string }
   | { type: "tool_use"; id: string; name: string; input: unknown }
-  | { type: "tool_result"; tool_use_id: string; content: string };
+  | { type: "tool_result"; tool_use_id: string; content: string }
+  | { type: "image"; source: { type: "base64"; media_type: string; data: string } };
 
 interface AnthropicMessage {
   role: "user" | "assistant";
@@ -678,7 +682,26 @@ export function toAnthropic(messages: Message[]): { system?: string; messages: A
     }
     flush();
     if (m.role === "user") {
-      out.push({ role: "user", content: typeof m.content === "string" ? m.content : "" });
+      // If the user message carries images (from @img:), build an array of
+      // content blocks: the text block first, then image blocks.
+      if (m.images && m.images.length > 0) {
+        const blocks: AnthropicBlock[] = [];
+        const text = typeof m.content === "string" ? m.content : "";
+        if (text) blocks.push({ type: "text", text });
+        for (const img of m.images) {
+          blocks.push({
+            type: "image",
+            source: {
+              type: "base64",
+              media_type: img.media_type,
+              data: img.data,
+            },
+          });
+        }
+        out.push({ role: "user", content: blocks });
+      } else {
+        out.push({ role: "user", content: typeof m.content === "string" ? m.content : "" });
+      }
     } else {
       const blocks: AnthropicBlock[] = [];
       if (typeof m.content === "string" && m.content) blocks.push({ type: "text", text: m.content });

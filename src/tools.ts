@@ -279,6 +279,36 @@ export const TOOL_SCHEMAS: ToolSchema[] = [
       parameters: { type: "object", properties: {} },
     },
   },
+  {
+    type: "function",
+    function: {
+      name: "git_diff",
+      description:
+        "Run `git diff` in the current working directory. Returns the unified diff of unstaged changes. Pass staged=true for staged changes. Falls back gracefully when not in a git repo.",
+      parameters: {
+        type: "object",
+        properties: {
+          staged: { type: "boolean", description: "If true, show staged changes (git diff --staged). Default false (unstaged)." },
+        },
+        required: [],
+      },
+    },
+  },
+  {
+    type: "function",
+    function: {
+      name: "git_commit",
+      description:
+        "Stage all changes and create a git commit with the given message in the current working directory. Returns the commit hash on success. Requires user approval (unless yolo).",
+      parameters: {
+        type: "object",
+        properties: {
+          message: { type: "string", description: "Commit message (conventional-commit style recommended)." },
+        },
+        required: ["message"],
+      },
+    },
+  },
 ];
 
 export interface ToolContext {
@@ -417,6 +447,12 @@ export async function executeTool(
       break;
     case "task_list":
       result = taskList();
+      break;
+    case "git_diff":
+      result = gitDiff(args, ctx);
+      break;
+    case "git_commit":
+      result = gitCommit(args, ctx);
       break;
     default:
       result = { content: `error: unknown tool '${name}'`, audit: { error: "unknown_tool" } };
@@ -1165,4 +1201,47 @@ function taskList(): ToolResult {
     content: lines.join("\n"),
     audit: { count: tasks.length },
   };
+}
+
+function gitDiff(args: Record<string, unknown>, ctx: ToolContext): ToolResult {
+  const staged = args.staged === true;
+  const cmd = staged ? ["diff", "--staged"] : ["diff"];
+  try {
+    const r = spawnSync("git", cmd, { cwd: ctx.cwd, encoding: "utf8", timeout: 15000 });
+    const out = (r.stdout || "").trim();
+    if (r.error) return { content: `error: ${r.error.message}` };
+    if (r.status !== 0 && !out) return { content: "(no changes)" };
+    // Truncate very large diffs
+    const maxLen = 20000;
+    const truncated = out.length > maxLen
+      ? out.slice(0, maxLen) + `\n... (truncated, ${out.length - maxLen} more chars)`
+      : out;
+    return { content: truncated || "(no changes)", audit: { lines: out.split("\n").length } };
+  } catch (e: any) {
+    return { content: `error: ${e.message}` };
+  }
+}
+
+function gitCommit(args: Record<string, unknown>, ctx: ToolContext): ToolResult {
+  const message = String(args.message ?? "");
+  if (!message.trim()) return { content: "error: commit message is required" };
+  try {
+    // Stage everything first
+    const add = spawnSync("git", ["add", "-A"], { cwd: ctx.cwd, encoding: "utf8", timeout: 10000 });
+    if (add.error) return { content: `error: git add failed: ${add.error.message}` };
+
+    const r = spawnSync("git", ["commit", "-m", message], { cwd: ctx.cwd, encoding: "utf8", timeout: 15000 });
+    const out = (r.stdout || "").trim();
+    const err = (r.stderr || "").trim();
+    if (r.error) return { content: `error: ${r.error.message}` };
+    if (r.status !== 0) {
+      return { content: err || out || `git commit failed with status ${r.status}` };
+    }
+    // Extract the commit hash
+    const hashMatch = out.match(/\[[\w-]+ ([a-f0-9]+)\]/);
+    const hash = hashMatch ? hashMatch[1] : out;
+    return { content: out || "committed", audit: { commit_hash: hash } };
+  } catch (e: any) {
+    return { content: `error: ${e.message}` };
+  }
 }

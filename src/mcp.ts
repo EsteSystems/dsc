@@ -161,6 +161,8 @@ export interface MCPConnection {
   tools: ToolSchema[];
   /** Lookup the original server tool name from a namespaced name. */
   toolMap: Map<string, string>;
+  /** Resources advertised by this server (URIs). Exposed via mcp_<server>_resource_read. */
+  resourceUris?: string[];
   /** The raw server config we connected with — kept so callMCPTool can
    *  read requireApproval without a second lookup. */
   config: MCPServerConfig;
@@ -339,7 +341,38 @@ async function connectOne(
     toolMap.set(namespaced, t.name);
   }
 
-  return { name, client, transport, tools, toolMap, config };
+  // Discover MCP resources and expose them as a pseudo-tool.
+  let resourceUris: string[] | undefined;
+  try {
+    const resources = await withTimeout(
+      client.listResources(),
+      Math.min(timeoutMs, 4000),
+      `mcp.${name}: listResources timed out`,
+    );
+    if (resources.resources && resources.resources.length > 0) {
+      resourceUris = resources.resources.map((r: any) => r.uri);
+      const resourceToolName = `mcp_${name}_resource_read`;
+      tools.push({
+        type: "function",
+        function: {
+          name: resourceToolName,
+          description: `Read a resource from the MCP server '${name}'. Known URIs: ${resourceUris.slice(0, 20).join(", ")}${resourceUris.length > 20 ? ` ... (+${resourceUris.length - 20} more)` : ""}. Call with {"uri": "<uri>"}.`,
+          parameters: {
+            type: "object",
+            properties: {
+              uri: { type: "string", description: "The resource URI to read." },
+            },
+            required: ["uri"],
+          },
+        },
+      });
+      toolMap.set(resourceToolName, resourceToolName);
+    }
+  } catch {
+    // Resource listing is optional — many servers don't support it.
+  }
+
+  return { name, client, transport, tools, toolMap, resourceUris, config };
 }
 
 async function withTimeout<T>(
@@ -462,6 +495,27 @@ export async function callMCPTool(
   }
 
   try {
+    // ── Resource read (mcp_<server>_resource_read) ──────────────────
+    if (toolName === "resource_read") {
+      const uri = typeof args.uri === "string" ? args.uri : "";
+      if (!uri) return { content: "error: missing 'uri' for resource read" };
+      const r = await conn.client.readResource({ uri });
+      const contents = Array.isArray((r as any).contents)
+        ? (r as any).contents
+        : [r];
+      const parts: string[] = [];
+      for (const item of contents) {
+        if (item.text && typeof item.text === "string") {
+          parts.push(item.text);
+        } else if (item.blob) {
+          parts.push(`(binary resource: ${item.mimeType ?? "unknown type"}, ${typeof item.blob === "string" ? item.blob.length + " bytes" : "blob"})`);
+        } else {
+          parts.push(`(resource: ${item.uri ?? "?"})`);
+        }
+      }
+      return { content: parts.join("\n") || "(empty resource)" };
+    }
+
     const toolTimeout = (conn.config.timeoutMs ?? 60000) * 3;
     const r = await conn.client.callTool(
       { name: toolName, arguments: args },
