@@ -364,6 +364,7 @@ ghost-text suggestion previews the match as you type.
 | `/transcript` | Print the full conversation, including any messages compaction archived. |
 | `/compact [N]` | Summarize older turns into a synthetic block (kept in the system prompt) and move them to the archive. Keeps the last `N` user turns verbatim (default 4). Cumulative across re-runs. |
 | `/edit [text]` | Open `$VISUAL`/`$EDITOR`/`vi` on a tmp file; the saved content runs as the next prompt. |
+| `/review [n]` | Critically review the last (or Nth-last) assistant response — identifies errors, omissions, and offers an improved version. |
 | `/plan <description>` | Generate a step-by-step implementation plan for the task. The agent outputs a numbered task list; a compact progress indicator appears above the prompt. `/plan:show` to review, `/plan:go` to execute the next pending task, `/plan:done` to mark complete, `/plan:skip [n]` to skip, `/plan:clear` to discard. |
 | `/version` | Print version (dsc, Node, platform/arch). |
 | `/help` | Show the in-app help. |

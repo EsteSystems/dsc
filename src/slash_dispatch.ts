@@ -140,6 +140,7 @@ const HELP_LINES = [
   "/search [use|key] …     show / switch search provider / save brave|tavily key",
   "/update                 check npm for a newer dsc and install it",
   "/edit [text]            open $EDITOR; the saved buffer becomes the next prompt",
+  "/review [n]             critically review the last (or Nth-last) assistant response",
   "/exit                   exit",
   "/plan <description>     create a step-by-step plan; /plan:go to execute",
   "/plan:show              show current plan and progress",
@@ -830,6 +831,24 @@ export async function dispatchSlash(line: string, ctx: SlashContext): Promise<bo
       } else {
         ctx.submit(draft);
       }
+      return true;
+    }
+
+    case "review": {
+      // Find the last assistant message (or Nth-last if specified).
+      const msgs = ctx.getMessages();
+      const n = arg.trim() ? Math.max(1, parseInt(arg.trim(), 10) || 1) : 1;
+      const assistants = msgs.filter((m) => m.role === "assistant");
+      if (!assistants.length) {
+        emit("no assistant responses to review");
+        return true;
+      }
+      const target = assistants[assistants.length - Math.min(n, assistants.length)];
+      const content = typeof target.content === "string" ? target.content : "(non-text content)";
+      ctx.submit(
+        `Critically review your last response. Identify any errors, omissions, unclear explanations, or suboptimal code. Then provide an improved version.\n\nYour response to review:\n---\n${content}\n---`,
+      );
+      emit("reviewing…");
       return true;
     }
 
