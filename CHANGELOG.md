@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.5.0] - 2026-06-13
+
 ### Added
 - **Native memory graph** (replaces the Python `mcp-memory` server). A SQLite-backed knowledge graph that extracts propositions from conversations, links them with typed edges (supports, contradicts, instantiates, analogizes, relates), and surfaces them automatically before every agent turn. Zero Python deps — everything runs in-process. Enable with `"memory": { "enabled": true }` in `~/.config/dsc/config.json`. The agent can also call `mcp_memory_*` tools directly (query, store, tensions, stats, decay, node detail). If you were running the Python `mcp-memory` server, remove its `mcp.servers.memory` block from config.json to avoid duplicate tools.
 
@@ -276,7 +278,8 @@ Initial public release.
 - DECSTBM-pinned status bar.
 - Cross-platform packaging (`npm pack` + per-OS installer scripts).
 
-[Unreleased]: https://github.com/EsteSystems/dsc/compare/v1.4.0...HEAD
+[Unreleased]: https://github.com/EsteSystems/dsc/compare/v1.5.0...HEAD
+[1.5.0]: https://github.com/EsteSystems/dsc/compare/v1.4.0...v1.5.0
 [1.4.0]: https://github.com/EsteSystems/dsc/compare/v1.3.0...v1.4.0
 [1.3.0]: https://github.com/EsteSystems/dsc/compare/v1.2.1...v1.3.0
 [1.2.1]: https://github.com/EsteSystems/dsc/compare/v1.2.0...v1.2.1
