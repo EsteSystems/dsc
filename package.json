@@ -1,6 +1,6 @@
 {
   "name": "@este.systems/dsc",
-  "version": "1.3.0",
+  "version": "1.4.0",
   "description": "Dev Shell Companion — a CLI coding agent that lives in your terminal",
   "keywords": [
     "deepseek",
