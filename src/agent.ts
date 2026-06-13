@@ -257,6 +257,17 @@ export async function runAgent(opts: RunOptions): Promise<void> {
     }
 
     const toolCalls = msg.tool_calls;
+
+    // Partition into read-only (parallel) and read-write (sequential).
+    // The model cannot chain calls within a single turn (it has no results
+    // yet), so all read-only calls are safe to run concurrently.
+    type Pending = {
+      index: number;
+      call: (typeof toolCalls)[0];
+      fn: () => Promise<{ content: string; rejected?: boolean }>;
+    };
+    const ro: Pending[] = [];
+    const rw: Pending[] = [];
     for (let i = 0; i < toolCalls.length; i++) {
       const call = toolCalls[i];
       const name = call.function.name;
@@ -269,48 +280,61 @@ export async function runAgent(opts: RunOptions): Promise<void> {
       stats.tool_calls_total += 1;
       stats.tool_calls_by_name[name] = (stats.tool_calls_by_name[name] ?? 0) + 1;
 
-      const toolSpinner = new Spinner(`running ${name}`);
-      // Don't spin tools that need approval (interactive prompt).
       const interactive = !READ_ONLY_TOOLS.has(name) && !toolCtx.yolo;
-      if (!interactive && !events) toolSpinner.start();
-      let result: { content: string; rejected?: boolean };
-      let throwAfter: unknown = null;
-      try {
-        // MCP-provided tools have names like `mcp_<server>_<tool>`.
-        // Route them to the caller-supplied dispatcher; everything else
-        // goes through the built-in executor in tools.ts.
-        if (opts.dispatchExtraTool && name.startsWith("mcp_")) {
-          let parsedArgs: Record<string, unknown> = {};
-          try {
-            parsedArgs = JSON.parse(argsRaw || "{}");
-          } catch {
-            // fall through with empty args — dispatcher returns a useful
-            // error string in its own ToolResult
+
+      const execute = async (): Promise<{ content: string; rejected?: boolean }> => {
+        const toolSpinner = new Spinner(`running ${name}`);
+        if (!interactive && !events) toolSpinner.start();
+        try {
+          if (opts.dispatchExtraTool && name.startsWith("mcp_")) {
+            let parsedArgs: Record<string, unknown> = {};
+            try { parsedArgs = JSON.parse(argsRaw); } catch { /* use empty */ }
+            return await opts.dispatchExtraTool(name, parsedArgs);
           }
-          result = await opts.dispatchExtraTool(name, parsedArgs);
-        } else {
-          result = await executeTool(name, argsRaw, toolCtx, signal);
+          return await executeTool(name, argsRaw, toolCtx, signal);
+        } catch (e) {
+          const isAbort =
+            e instanceof Error &&
+            (e.name === "AbortError" || (e as { code?: string }).code === "ABORT_ERR");
+          const result = {
+            content: isAbort ? "interrupted" : `error: ${(e as Error).message ?? "tool failed"}`,
+            rejected: isAbort,
+          };
+          // Save the original error — it's re-thrown after we record the stub
+          // result so the caller sees the first failure.
+          (result as { _throwAfter?: unknown })._throwAfter = e;
+          return result;
+        } finally {
+          toolSpinner.stop();
         }
-      } catch (e) {
-        // Convert the throw into a synthetic tool result so the assistant's
-        // tool_call gets a corresponding tool message — without that, the
-        // next API call 400s with "tool_calls must be followed by tool
-        // messages". The original error is re-thrown after we record it.
-        throwAfter = e;
-        const isAbort =
-          e instanceof Error &&
-          (e.name === "AbortError" || (e as { code?: string }).code === "ABORT_ERR");
-        result = {
-          content: isAbort ? "interrupted" : `error: ${(e as Error).message ?? "tool failed"}`,
-          rejected: isAbort,
-        };
-      } finally {
-        toolSpinner.stop();
-      }
+      };
+
+      (interactive ? rw : ro).push({ index: i, call, fn: execute });
+    }
+
+    // Execute read-only tools in parallel, then read-write sequentially.
+    const results = new Array<{ content: string; rejected?: boolean; _throwAfter?: unknown }>(toolCalls.length);
+    const roResults = await Promise.all(ro.map((p) => p.fn().then((r) => [p.index, r] as const)));
+    for (const [idx, r] of roResults) results[idx] = r;
+
+    let firstError: unknown = null;
+    for (const p of rw) {
+      results[p.index] = await p.fn();
+    }
+
+    // Record results in the original tool_call order and check for errors.
+    for (let i = 0; i < toolCalls.length; i++) {
+      const call = toolCalls[i];
+      const name = call.function.name;
+      const result = results[i];
+      const throwAfter = result?._throwAfter;
+      delete result?._throwAfter;
+      if (throwAfter && !firstError) firstError = throwAfter;
+
       messages.push({
         role: "tool",
         tool_call_id: call.id,
-        content: result.content,
+        content: result?.content ?? "error: no result",
       });
       onTurn?.(); // status reflects the tool result we just recorded
       if (events) {
@@ -333,6 +357,7 @@ export async function runAgent(opts: RunOptions): Promise<void> {
         throw throwAfter;
       }
     }
+    if (firstError) throw firstError;
     }
     // Inner for-loop exited because depth hit MAX_TOOL_DEPTH (the normal
     // "model done, no tool_calls" exit `return`s out of runAgent). Decide

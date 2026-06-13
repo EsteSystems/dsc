@@ -10,6 +10,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Added
 - **`/plan` mode** — type `/plan add auth middleware` and the agent creates a step-by-step task list. Use `/plan:show` to view progress, `/plan:go` to execute the next pending task, `/plan:done` to mark it complete, `/plan:skip [n]` to skip, `/plan:clear` to discard. A compact progress line (`plan: add auth  [✓✓◌✗] 2/4 (50%)`) sits above the prompt. The plan persists across turns but is session-scoped (reset on `/clear`).
 - **Project memory (auto-context)** — dsc now indexes `AGENTS.md`, `README.md`, `CHANGELOG.md`, and any files the agent reads or edits during the session. Before each turn, it searches the index for keywords from your prompt and prepends the most relevant paragraphs. The agent sees project docs without needing to grep for them first. Zero-dependency TF-IDF-style keyword matching; no embeddings or vector DB. Rebuilt on `/clear`.
+- **Parallel read-only tool execution** — when the model issues multiple read-only tools in a single turn (`read_file`, `grep`, `glob`, `list_dir`, `mcp_files_*`), they now run concurrently. Read-write tools still execute sequentially (with approval gating). Cuts latency on multi-file operations.
 
 ## [1.3.0] - 2026-06-13
 
