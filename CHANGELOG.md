@@ -12,6 +12,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Project memory (auto-context)** — dsc now indexes `AGENTS.md`, `README.md`, `CHANGELOG.md`, and any files the agent reads or edits during the session. Before each turn, it searches the index for keywords from your prompt and prepends the most relevant paragraphs. The agent sees project docs without needing to grep for them first. Zero-dependency TF-IDF-style keyword matching; no embeddings or vector DB. Rebuilt on `/clear`.
 - **Parallel read-only tool execution** — when the model issues multiple read-only tools in a single turn (`read_file`, `grep`, `glob`, `list_dir`, `mcp_files_*`), they now run concurrently. Read-write tools still execute sequentially (with approval gating). Cuts latency on multi-file operations.
 - **`/review` command** — `/review` (or `/review 2` for the second-last response) asks the agent to critically examine its last answer, point out errors or omissions, and provide an improved version. Based on the Reflexion self-critique pattern.
+- **Context compression** — tool outputs larger than 8 000 characters are now intelligently compressed before entering the message history. The first 60% and last 30% are kept; the middle is replaced with a one-line truncation notice. Browsing a 500-line file no longer consumes the entire context window in one read.
 
 ## [1.3.0] - 2026-06-13
 

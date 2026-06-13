@@ -168,6 +168,21 @@ export interface RunOptions {
   chatStream?: typeof chatStream;
 }
 
+/** Compress long tool outputs to keep the context window from ballooning.
+ *  Keeps the first 60% and last 30% of the output; the middle is replaced
+ *  with a one-line summary.  Smaller than 8 000 chars pass through untouched. */
+function compressToolOutput(text: string, maxChars = 8_000): string {
+  if (text.length <= maxChars) return text;
+  const head = Math.floor(maxChars * 0.6);
+  const tail = Math.floor(maxChars * 0.3);
+  const skipped = text.length - head - tail;
+  return (
+    text.slice(0, head) +
+    `\n…(truncated ${skipped.toLocaleString()} chars — /compact or re-run with tighter scope to see more)\n` +
+    text.slice(text.length - tail)
+  );
+}
+
 export async function runAgent(opts: RunOptions): Promise<void> {
   const { messages, model, stats, toolCtx, signal, onTurn, events } = opts;
   const showReasoning = opts.showReasoning ?? true;
@@ -289,9 +304,11 @@ export async function runAgent(opts: RunOptions): Promise<void> {
           if (opts.dispatchExtraTool && name.startsWith("mcp_")) {
             let parsedArgs: Record<string, unknown> = {};
             try { parsedArgs = JSON.parse(argsRaw); } catch { /* use empty */ }
-            return await opts.dispatchExtraTool(name, parsedArgs);
+            const raw = await opts.dispatchExtraTool(name, parsedArgs);
+            return { ...raw, content: compressToolOutput(raw.content) };
           }
-          return await executeTool(name, argsRaw, toolCtx, signal);
+          const raw = await executeTool(name, argsRaw, toolCtx, signal);
+          return { ...raw, content: compressToolOutput(raw.content) };
         } catch (e) {
           const isAbort =
             e instanceof Error &&
