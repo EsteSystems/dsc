@@ -7,6 +7,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.3.0] - 2026-06-13
+
+### Added
+- **Syntax highlighting** in code blocks — a zero-dependency tokenizer highlights keywords (blue bold), strings (green), numbers (yellow), and comments (dim italic) for 8 language families (ts/js, py, sh, rs, go, java, c, sql). Aliases resolve automatically (`bash`→`sh`, `js`→`ts`, `python`→`py`, etc.). Unknown languages fall back to flat cyan.
+- **`@file` syntax** — type `@src/foo.ts`, `@path:40`, or `@path:40-80` in a prompt and the file contents are read and prepended before sending. Works in both interactive and one-shot (`-p`) modes. Directories are skipped with a note; missing files produce an inline error.
+- **Streaming bash output** — long-running commands (builds, tests) now show stdout/stderr in real time, tee'd to the terminal while still captured for the tool result. Gated on `process.stderr.isTTY` so `dsc serve` logs stay clean.
+- **Token budget indicator** — the status bar now shows context-window usage as `ctx:98K/1M (10%)`. Hits yellow at ≥80% and red at ≥95% so you can compact before hitting the wall.
+- **Custom slash commands** — define `"commands": {"build": "npm run build", "test": "npm test"}` in `config.json` and `/build` / `/test` run them via bash with output shown inline. `/help` lists the mechanic.
+
 ## [1.2.1] - 2026-06-11
 
 ### Fixed
