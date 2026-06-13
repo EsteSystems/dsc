@@ -660,7 +660,7 @@ so the model retains semantic context. Cumulative — re-running `/compact`
 folds the prior summary into the new one.
 
 Auto-compact runs the same routine after any successful turn whose
-estimated context exceeds `DSC_AUTO_COMPACT_AT` tokens (default 50 000;
+estimated context exceeds `DSC_AUTO_COMPACT_AT` tokens (default 20 000;
 set `0` / `off` / `false` to disable).
 
 `/transcript` prints the full conversation, including archived chunks,
@@ -712,7 +712,8 @@ XDG variables observed: `XDG_CONFIG_HOME`, `XDG_STATE_HOME`, `XDG_DATA_HOME`.
 | Var | Default | Purpose |
 |---|---|---|
 | `DEEPSEEK_API_KEY` | (read from config file) | Overrides the `api_key` in `config.json`. |
-| `DSC_AUTO_COMPACT_AT` | `50000` | Token threshold for auto-compact. `0`/`off`/`false` disables. |
+| `DSC_AUTO_COMPACT_AT` | `20000` | Token threshold for auto-compact. `0`/`off`/`false` disables. |
+| `DSC_AUTO_COMPACT_KEEP` | `8` | User turns kept verbatim before the compact cut-point. |
 | `DSC_AUTO_CONTINUE` | `0` | When the agent hits the per-turn tool-call cap, auto-grant up to N extra 24-call budgets before stopping. `0`/`off`/`false` keeps the manual "type continue" prompt. |
 | `DSC_NO_AUDIT` | (off) | `1` disables the JSONL audit log. |
 | `DSC_SEARCH_PROVIDER` | (config or `ddg`) | `brave`, `tavily`, or `ddg`. |
