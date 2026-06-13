@@ -5,7 +5,7 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [1.6.0] - 2026-06-13
 
 ### Added
 - **dsc serve — HTTP API** alongside the existing WebSocket server. `POST /chat` with SSE streaming, `GET /health`, `GET /session/:id`. Token auth via `DSC_SERVE_TOKEN` env var or `serve.token` in config.json. Sessions persist to disk (SQLite) across client disconnects. Full slash command dispatch wired in serve mode.
@@ -20,6 +20,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `Message` interface gains optional `images` field for pre-encoded vision payloads.
 - `SessionMeta` / `SessionFileV2` / `SessionState` gain optional `forked_from` field.
 - `/list` now shows `← fork` for sessions created via `/fork`.
+
+## [Unreleased]
 
 ## [1.5.0] - 2026-06-13
 
@@ -292,7 +294,8 @@ Initial public release.
 - DECSTBM-pinned status bar.
 - Cross-platform packaging (`npm pack` + per-OS installer scripts).
 
-[Unreleased]: https://github.com/EsteSystems/dsc/compare/v1.5.0...HEAD
+[Unreleased]: https://github.com/EsteSystems/dsc/compare/v1.6.0...HEAD
+[1.6.0]: https://github.com/EsteSystems/dsc/compare/v1.5.0...v1.6.0
 [1.5.0]: https://github.com/EsteSystems/dsc/compare/v1.4.0...v1.5.0
 [1.4.0]: https://github.com/EsteSystems/dsc/compare/v1.3.0...v1.4.0
 [1.3.0]: https://github.com/EsteSystems/dsc/compare/v1.2.1...v1.3.0
