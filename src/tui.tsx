@@ -49,6 +49,7 @@ import { formatVersionInfo } from "./version.js";
 import { openEditor } from "./editor.js";
 import { checkForUpdate } from "./update.js";
 import { dispatchSlash, type SlashContext } from "./slash_dispatch.js";
+import { ProjectContext } from "./context.js";
 
 /** Parse a numbered task list from the agent's response. Returns empty array
  *  if no clear plan structure was found. */
@@ -239,6 +240,13 @@ async function main() {
     callMCPTool(mcpConnections, name, args, {
       sessionApprovals: toolCtx.sessionApprovals,
     });
+
+  // Project-context index: chunks AGENTS.md, README.md, etc. and
+  // injects relevant paragraphs before each agent turn.  Re-indexed
+  // when the session resets (/clear, /resume).
+
+  const projectCtx = new ProjectContext();
+  await projectCtx.build(cwd);
 
   // Coalescing save (same shape as REPL).
   let savePromise: Promise<void> | null = null;
@@ -476,6 +484,18 @@ async function main() {
       }
     }
 
+    // Inject relevant project context from indexed files (AGENTS.md,
+    // README.md, and recently-touched files).  The history shows the
+    // original user text; the model sees context-enriched.
+    const ctxSnippets = projectCtx.search(userText);
+    const enhancedText =
+      ctxSnippets.length > 0
+        ? "Relevant project context:\n\n" +
+          ctxSnippets.join("\n\n") +
+          "\n\n---\nUser: " +
+          userText
+        : userText;
+
     // Push the user message into history immediately so it's visible before
     // the model responds.
     setState((s) => ({
@@ -485,7 +505,7 @@ async function main() {
       ],
       busy: true,
     }));
-    messages.push({ role: "user", content: userText });
+    messages.push({ role: "user", content: enhancedText });
     pendingAbort = new AbortController();
     try {
       await runAgent({
@@ -525,6 +545,10 @@ async function main() {
       setState({ busy: false, task: null });
     }
     await persist();
+    // Index any files the agent touched this turn for future context queries.
+    for (const f of toolCtx.filesTouched) {
+      await projectCtx.addFile(cwd, f);
+    }
   };
 
   // Drain queued prompts after each turn so back-to-back submissions run in
@@ -702,6 +726,7 @@ async function main() {
         setState({ history: [], current: null, model, plan: null });
       }
       syncStatus();
+      void projectCtx.build(cwd); // re-index on session reset
     },
     runEditor: (initial) => {
       // ink owns the terminal — unmount before spawning $EDITOR so the editor

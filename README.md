@@ -500,6 +500,13 @@ so the model knows the source. The dsc-specific file appears last and
 effectively overrides earlier ones on conflict. Files re-read every turn
 — edit them and the next request picks up the change.
 
+dsc also automatically indexes AGENTS.md, README.md, CHANGELOG.md,
+and any files the agent has read or edited during the session. Before
+each turn it searches these for keywords matching your prompt and
+prepends the most relevant paragraphs so the agent has project context
+without needing to grep for it. The index is in-memory and rebuilt
+on `/clear`.
+
 `/instructions` lists which files are currently active and shows their
 content. Empty files are treated as absent. Files larger than 64 KB are
 skipped silently — keep instruction files reasonably short, both for the
