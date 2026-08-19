@@ -1,5 +1,6 @@
-import { promises as fs } from "node:fs";
+import { promises as fs, createWriteStream } from "node:fs";
 import { spawn, spawnSync } from "node:child_process";
+import { randomUUID } from "node:crypto";
 import { tmpdir } from "node:os";
 import * as path from "node:path";
 import type { ToolSchema } from "./api.js";
@@ -20,6 +21,7 @@ export const READ_ONLY_TOOLS = new Set([
   "grep",
   "glob",
   "web_search",
+  "bash_status",
   // task_* mutate the in-memory task list, not the filesystem — no approval
   // needed and we don't want them blocking on confirm prompts.
   "task_create",
@@ -133,15 +135,35 @@ export const TOOL_SCHEMAS: ToolSchema[] = [
     function: {
       name: "bash",
       description:
-        "Run a shell command. Always works regardless of OS — uses /bin/sh -c on Linux/macOS and cmd.exe /d /s /c on Windows. Pick syntax that matches the host: e.g. `ls` on Linux/macOS vs `dir` on Windows; `cat` vs `type`; `which` vs `where`; `rm` vs `del`; `mv` vs `move`. Package managers on Windows are `winget install <pkg>` (built-in on Windows 10 1809+ / 11) and `scoop install <pkg>` — apt/brew/yum/pacman don't exist there. For Node version management on Windows, use nvm-windows or fnm. Check the cwd in the system prompt to know which platform you're on (paths starting with a drive letter like C:\\ mean Windows). Output is captured and truncated if very long. Long-running interactive commands are not supported.",
+        "Run a shell command. Always works regardless of OS — uses /bin/sh -c on Linux/macOS and cmd.exe /d /s /c on Windows. Pick syntax that matches the host: e.g. `ls` on Linux/macOS vs `dir` on Windows; `cat` vs `type`; `which` vs `where`; `rm` vs `del`; `mv` vs `move`. Package managers on Windows are `winget install <pkg>` (built-in on Windows 10 1809+ / 11) and `scoop install <pkg>` — apt/brew/yum/pacman don't exist there. For Node version management on Windows, use nvm-windows or fnm. Check the cwd in the system prompt to know which platform you're on (paths starting with a drive letter like C:\\ mean Windows). Output is captured and truncated if very long. Long-running interactive commands are not supported. Set background=true for server/watch/test-style commands that would otherwise hit the foreground timeout; the tool returns immediately with a job_id and bash_status can be polled for output.",
       parameters: {
         type: "object",
         properties: {
           command: { type: "string", description: "The command to run." },
           description: { type: "string", description: "Short description of why." },
-          timeout_ms: { type: "integer", description: "Timeout in milliseconds (default 60000)." },
+          timeout_ms: { type: "integer", description: "Timeout in milliseconds (default 60000). Ignored for background jobs." },
+          background: {
+            type: "boolean",
+            description: "Run in the background and return a job_id immediately. Default false.",
+          },
         },
         required: ["command"],
+      },
+    },
+  },
+  {
+    type: "function",
+    function: {
+      name: "bash_status",
+      description:
+        "Check the status and recent output of a background bash command started with background=true. Returns job status, exit code when available, log path, and the last few lines of output.",
+      parameters: {
+        type: "object",
+        properties: {
+          job_id: { type: "string", description: "The job_id returned by the background bash command." },
+          tail_lines: { type: "integer", description: "Return only the last N lines of output (default 50)." },
+        },
+        required: ["job_id"],
       },
     },
   },
@@ -586,6 +608,9 @@ export async function executeTool(
     case "bash":
       result = await runBash(args, ctx, signal);
       break;
+    case "bash_status":
+      result = await runBashStatus(args, ctx);
+      break;
     case "grep":
       result = await runGrep(args, ctx, signal);
       break;
@@ -935,6 +960,153 @@ async function runVerify(
   };
 }
 
+interface BackgroundJob {
+  id: string;
+  command: string;
+  logPath: string;
+  status: "running" | "exited" | "spawn_failed" | "killed";
+  exitCode: number | null;
+  pid?: number;
+  startedAt: number;
+}
+
+const backgroundJobs = new Map<string, BackgroundJob>();
+
+function backgroundLogDir(ctx: ToolContext): string {
+  const safeSession = String(ctx.sessionId).replace(/[^a-zA-Z0-9._-]/g, "_");
+  return path.join(tmpdir(), "dsc", safeSession);
+}
+
+async function readTailLines(file: string, count: number): Promise<string> {
+  let fh: Awaited<ReturnType<typeof fs.open>> | undefined;
+  try {
+    const stat = await fs.stat(file);
+    if (stat.size === 0) return "";
+    fh = await fs.open(file, "r");
+    const readBytes = Math.min(stat.size, 64 * 1024);
+    const buf = Buffer.alloc(readBytes);
+    await fh.read(buf, 0, readBytes, stat.size - readBytes);
+    const text = buf.toString("utf8");
+    const lines = text.split("\n");
+    if (lines.length > 1 && lines[0] === "") lines.shift();
+    return lines.slice(-count).join("\n").replace(/\n$/, "");
+  } catch (e) {
+    return `(could not read log: ${(e as Error).message})`;
+  } finally {
+    if (fh) await fh.close().catch(() => {});
+  }
+}
+
+async function startBackgroundCommand(
+  command: string,
+  ctx: ToolContext,
+  timeoutMs: number,
+  signal?: AbortSignal,
+): Promise<ToolResult> {
+  const id = randomUUID();
+  const logPath = path.join(backgroundLogDir(ctx), `bg-${id}.log`);
+  let logStream: ReturnType<typeof createWriteStream>;
+  try {
+    await fs.mkdir(backgroundLogDir(ctx), { recursive: true });
+    logStream = createWriteStream(logPath, { flags: "a" });
+  } catch (e) {
+    return {
+      content: `error: could not create background log: ${(e as Error).message}`,
+      audit: { command, background: true, error: "log_open_failed" },
+    };
+  }
+
+  const job: BackgroundJob = {
+    id,
+    command,
+    logPath,
+    status: "running",
+    exitCode: null,
+    startedAt: Date.now(),
+  };
+  backgroundJobs.set(id, job);
+
+  let child: ReturnType<typeof spawn>;
+  try {
+    child = spawn(command, [], {
+      cwd: ctx.cwd,
+      shell: true,
+      stdio: ["ignore", "pipe", "pipe"],
+      windowsHide: true,
+    });
+  } catch (e) {
+    job.status = "spawn_failed";
+    logStream.end();
+    return {
+      content: `error: ${(e as Error).message}`,
+      audit: { command, background: true, job_id: id, error: "spawn_failed" },
+    };
+  }
+  job.pid = child.pid;
+
+  child.stdout?.on("data", (d) => logStream.write(d));
+  child.stderr?.on("data", (d) => logStream.write(d));
+  child.on("error", (e) => {
+    if (job.status === "running") job.status = "spawn_failed";
+    logStream.end();
+  });
+  child.on("exit", (code) => {
+    job.status = "exited";
+    job.exitCode = code;
+    logStream.end();
+  });
+  child.on("close", () => logStream.end());
+
+  const onAbort = () => {
+    job.status = "killed";
+    killWindowsTree(child.pid);
+    child.kill("SIGTERM");
+    logStream.end();
+  };
+  if (signal) {
+    if (signal.aborted) onAbort();
+    else signal.addEventListener("abort", onAbort, { once: true });
+  }
+
+  return {
+    content: `ok: started background job ${id} (pid ${child.pid}). Log: ${logPath}. Use bash_status({"job_id": "${id}"}) to check status.`,
+    audit: {
+      command,
+      background: true,
+      job_id: id,
+      pid: child.pid,
+      log_path: logPath,
+      timeout_ms: timeoutMs,
+    },
+  };
+}
+
+async function runBashStatus(
+  args: Record<string, unknown>,
+  ctx: ToolContext,
+): Promise<ToolResult> {
+  const jobId = String(args.job_id ?? "");
+  if (!jobId) return { content: "error: missing 'job_id'", audit: { error: "missing_job_id" } };
+  const job = backgroundJobs.get(jobId);
+  if (!job) {
+    return { content: `error: unknown job_id: ${jobId}`, audit: { job_id: jobId, error: "unknown_job" } };
+  }
+  const tailLines = Number(args.tail_lines) > 0 ? Math.floor(Number(args.tail_lines)) : 50;
+  const tail = await readTailLines(job.logPath, tailLines);
+  const exitDesc = job.exitCode === null ? "" : ` (exit ${job.exitCode})`;
+  const body = [
+    `status: ${job.status}${exitDesc}`,
+    `command: ${job.command}`,
+    `log: ${job.logPath}`,
+    "",
+    tail || "(no output yet)",
+  ].join("\n");
+  return {
+    content: body,
+    audit: { job_id: jobId, status: job.status, exit_code: job.exitCode, log_path: job.logPath },
+  };
+}
+
 async function runBash(
   args: Record<string, unknown>,
   ctx: ToolContext,
@@ -952,6 +1124,9 @@ async function runBash(
       rejected: true,
       audit: { command, timeout_ms: timeoutMs },
     };
+  }
+  if (Boolean(args.background)) {
+    return startBackgroundCommand(command, ctx, timeoutMs, signal);
   }
   return new Promise<ToolResult>((resolve) => {
     // `shell: true` makes Node pick the platform's default: /bin/sh -c on

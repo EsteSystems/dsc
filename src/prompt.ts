@@ -11,7 +11,8 @@ Available tools:
 - write_file(path, content): create a new file or fully overwrite an existing one. Prefer edit_file for changes to existing files.
 - edit_file(path, old_string, new_string, replace_all?): replace an exact substring. old_string must be unique in the file unless replace_all is true. Include enough surrounding context to make old_string unique.
 - multi_edit(path, edits): apply several edits to one file in a single atomic call (each edit is {old_string, new_string, replace_all?}, applied in order). Prefer this over multiple edit_file calls on the same file.
-- bash(command, description?, timeout_ms?): run a shell command. Output is captured and truncated if very long.
+- bash(command, description?, timeout_ms?, background?): run a shell command. Output is captured and truncated if very long. Set background=true for server/watch/test-style commands that would otherwise hit the foreground timeout; it returns a job_id immediately and bash_status can be polled.
+- bash_status(job_id, tail_lines?): check status and recent output of a background bash command.
 - grep(pattern, path?, glob?, case_insensitive?): regex search across files (ripgrep when available, grep -rn fallback). Prefer this over running grep through bash for finding code.
 - glob(pattern, path?): list paths matching a glob (e.g. 'src/**/*.ts'). Prefer this over running find through bash.
 - web_fetch(url): GET a URL; HTML is stripped to text.

@@ -562,6 +562,36 @@ describe("bash", () => {
     const full = fs.readFileSync(offloadPath!, "utf8");
     assert.ok(full.includes("x".repeat(20000)), "scratch file should contain the full output");
   });
+
+  it("bash_status errors on an unknown job_id", async () => {
+    const r = await executeTool("bash_status", j({ job_id: "nope" }), ctx());
+    assert.match(r.content, /unknown job_id/);
+  });
+
+  it("runs a command in the background and reports status via bash_status", async () => {
+    const c = ctx({ sessionId: "bg-test" });
+    const r = await executeTool(
+      "bash",
+      j({
+        command: `node -e "setTimeout(() => console.log('bg-hello'), 30)"`,
+        background: true,
+      }),
+      c,
+    );
+    assert.match(r.content, /started background job/);
+    const jobId = r.audit?.job_id as string | undefined;
+    assert.ok(jobId, "audit should record the background job_id");
+
+    let status = "";
+    for (let i = 0; i < 50; i++) {
+      const s = await executeTool("bash_status", j({ job_id: jobId }), c);
+      status = s.content;
+      if (status.includes("bg-hello")) break;
+      await new Promise((res) => setTimeout(res, 20));
+    }
+    assert.match(status, /bg-hello/);
+    assert.match(status, /status: (running|exited)/);
+  });
 });
 
 describe("verify", () => {
@@ -715,7 +745,7 @@ describe("task tools", () => {
 
 describe("tool surface", () => {
   it("READ_ONLY_TOOLS contains the no-approval tools and not the gated ones", () => {
-    for (const t of ["read_file", "list_dir", "grep", "glob", "web_search", "task_create", "task_list"]) {
+    for (const t of ["read_file", "list_dir", "grep", "glob", "web_search", "bash_status", "task_create", "task_list"]) {
       assert.ok(READ_ONLY_TOOLS.has(t), `${t} should be read-only`);
     }
     for (const t of ["write_file", "edit_file", "multi_edit", "bash", "web_fetch", "verify"]) {
@@ -737,7 +767,7 @@ describe("tool surface", () => {
   it("advertises the documented built-in tools", () => {
     const names = new Set(TOOL_SCHEMAS.map((s) => s.function.name));
     for (const t of [
-      "read_file", "list_dir", "write_file", "edit_file", "multi_edit", "bash", "grep", "glob",
+      "read_file", "list_dir", "write_file", "edit_file", "multi_edit", "bash", "bash_status", "grep", "glob",
       "web_fetch", "web_search", "task_create", "task_update", "task_list", "verify",
     ]) {
       assert.ok(names.has(t), `schema should advertise ${t}`);
