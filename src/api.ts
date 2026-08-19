@@ -35,14 +35,30 @@ export const MODEL_REGISTRY: Record<string, ModelSpec> = {
     rates: { in_hit: 0.0028e-6, in_miss: 0.138e-6, out: 0.276e-6 },
     contextWindow: 1_000_000,
   },
-  // Anthropic. Pricing: $3/M input, $15/M output, $0.30/M cache read.
-  // Requires ANTHROPIC_API_KEY (env) or providers.anthropic.api_key (config).
-  "claude-sonnet-4-6": {
-    id: "claude-sonnet-4-6",
+  // Anthropic. Pricing from claude.com/pricing (input / output per MTok):
+  // Sonnet 5 $2/$10, Opus 5 $5/$25, Fable 5 $10/$50; cache reads are 10% of
+  // base input. Requires ANTHROPIC_API_KEY (env) or
+  // providers.anthropic.api_key (config).
+  "claude-sonnet-5": {
+    id: "claude-sonnet-5",
     provider: "anthropic",
-    rates: { in_hit: 0.30e-6, in_miss: 3e-6, out: 15e-6 },
-    contextWindow: 200_000,
-    maxTokens: 8192,
+    rates: { in_hit: 0.20e-6, in_miss: 2e-6, out: 10e-6 },
+    contextWindow: 1_000_000,
+    maxTokens: 128_000,
+  },
+  "claude-opus-5": {
+    id: "claude-opus-5",
+    provider: "anthropic",
+    rates: { in_hit: 0.50e-6, in_miss: 5e-6, out: 25e-6 },
+    contextWindow: 1_000_000,
+    maxTokens: 128_000,
+  },
+  "claude-fable-5": {
+    id: "claude-fable-5",
+    provider: "anthropic",
+    rates: { in_hit: 1e-6, in_miss: 10e-6, out: 50e-6 },
+    contextWindow: 1_000_000,
+    maxTokens: 128_000,
   },
 };
 

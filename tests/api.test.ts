@@ -242,21 +242,21 @@ describe("provider availability + key management", () => {
 
   it("isKnownModel recognizes registered ids and rejects others", () => {
     assert.ok(isKnownModel("deepseek-v4-pro"));
-    assert.ok(isKnownModel("claude-sonnet-4-6"));
+    assert.ok(isKnownModel("claude-sonnet-5"));
     assert.ok(!isKnownModel("not-a-model"));
   });
 
   it("DeepSeek is always available; Claude needs a key", () => {
     assert.ok(modelAvailable("deepseek-v4-pro"));
-    assert.equal(modelAvailable("claude-sonnet-4-6"), false);
-    assert.ok(!availableModels().includes("claude-sonnet-4-6"));
+    assert.equal(modelAvailable("claude-sonnet-5"), false);
+    assert.ok(!availableModels().includes("claude-sonnet-5"));
     assert.ok(availableModels().includes("deepseek-v4-pro"));
   });
 
   it("ANTHROPIC_API_KEY (env) makes Claude available", () => {
     process.env.ANTHROPIC_API_KEY = "sk-ant-env";
-    assert.ok(modelAvailable("claude-sonnet-4-6"));
-    assert.ok(availableModels().includes("claude-sonnet-4-6"));
+    assert.ok(modelAvailable("claude-sonnet-5"));
+    assert.ok(availableModels().includes("claude-sonnet-5"));
     assert.equal(providerKeySource("anthropic"), "env");
   });
 
@@ -265,7 +265,7 @@ describe("provider availability + key management", () => {
     assert.equal(written, configPath());
     _resetConfigCachesForTests();
     assert.equal(providerKeySource("anthropic"), "file");
-    assert.ok(modelAvailable("claude-sonnet-4-6"));
+    assert.ok(modelAvailable("claude-sonnet-5"));
     const cfg = JSON.parse(fs.readFileSync(configPath(), "utf8"));
     assert.equal(cfg.providers.anthropic.api_key, "sk-ant-file");
   });

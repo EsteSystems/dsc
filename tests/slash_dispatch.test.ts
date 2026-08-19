@@ -390,7 +390,7 @@ describe("/model availability", () => {
     _resetConfigCachesForTests();
     try {
       const { ctx, emitted, calls } = makeCtx();
-      await dispatchSlash("/model claude-sonnet-4-6", ctx);
+      await dispatchSlash("/model claude-sonnet-5", ctx);
       assert.match(last(emitted), /needs the Anthropic API key/);
       assert.equal(calls.setModel.length, 0);
     } finally {

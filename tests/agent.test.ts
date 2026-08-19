@@ -567,7 +567,9 @@ describe("estimateContextTokens", () => {
 describe("autoCompactAtTokens", () => {
   it("is model-aware: 10% of context window, clamped", () => {
     assert.equal(autoCompactAtTokens("deepseek-v4-pro"), 96_000); // 1M → 100k, capped at 96k
-    assert.equal(autoCompactAtTokens("claude-sonnet-4-6"), 32_000); // 200k → 20k, floored at 32k
+    assert.equal(autoCompactAtTokens("claude-sonnet-5"), 96_000); // 1M → 100k, capped at 96k
+    assert.equal(autoCompactAtTokens("claude-opus-5"), 96_000);
+    assert.equal(autoCompactAtTokens("claude-fable-5"), 96_000);
   });
 
   it("honors DSC_AUTO_COMPACT_AT override", () => {

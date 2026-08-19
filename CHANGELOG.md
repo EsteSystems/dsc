@@ -7,6 +7,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- **Claude 5 models** — registered `claude-sonnet-5`, `claude-opus-5`, and `claude-fable-5` with current Anthropic pricing, 1M context windows, and 128k max output. README provider table updated accordingly.
+
 ## [1.7.2] - 2026-08-19
 
 ### Fixed

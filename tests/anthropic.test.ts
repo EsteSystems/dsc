@@ -188,7 +188,7 @@ describe("anthropic chat() end-to-end", () => {
           { status: 200 },
         ),
     );
-    const resp = await chat({ model: "claude-sonnet-4-6", messages: MSGS });
+    const resp = await chat({ model: "claude-sonnet-5", messages: MSGS });
     const msg = resp.choices[0].message;
     assert.equal(msg.content, "the answer");
     assert.equal(resp.choices[0].finish_reason, "tool_calls");
@@ -205,7 +205,7 @@ describe("anthropic chat() end-to-end", () => {
     assert.ok(headers["anthropic-version"]);
     const sentBody = JSON.parse(lastRequest!.init.body as string);
     assert.equal(sentBody.system, "sys");
-    assert.equal(sentBody.model, "claude-sonnet-4-6");
+    assert.equal(sentBody.model, "claude-sonnet-5");
     assert.ok(sentBody.max_tokens > 0);
   });
 });
@@ -234,7 +234,7 @@ describe("anthropic chatStream() end-to-end", () => {
 
     const chunks: string[] = [];
     const resp = await chatStream({
-      model: "claude-sonnet-4-6",
+      model: "claude-sonnet-5",
       messages: MSGS,
       onContent: (t) => chunks.push(t),
     });
