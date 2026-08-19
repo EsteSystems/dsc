@@ -73,6 +73,18 @@ describe("buildSystemPrompt", () => {
     assert.ok(idxAgents < idxDsc);
   });
 
+  it("includes the retrieval routing decision tree", () => {
+    const p = buildSystemPrompt({ cwd: "/a", date: FIXED_DATE });
+    assert.ok(p.includes("Retrieval routing:"));
+    assert.match(p, /Literal string or regex → grep/);
+    assert.match(p, /Filename or path pattern → glob/);
+    // Routing sits in the static tooling preamble, before the dynamic rules.
+    const routingIdx = p.indexOf("Retrieval routing:");
+    const rulesIdx = p.indexOf("Rules:");
+    assert.ok(routingIdx > 0);
+    assert.ok(routingIdx < rulesIdx);
+  });
+
   it("does not embed time-varying status info (cache-prefix hygiene)", () => {
     const p = buildSystemPrompt({ cwd: "/a", date: FIXED_DATE });
     // Old shape used to inject "- status: <model … timer …>". That
