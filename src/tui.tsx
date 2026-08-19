@@ -40,6 +40,7 @@ import {
 import type { AgentEvents } from "./agent.js";
 import type { ToolContext } from "./tools.js";
 import { buildOneShotEnvelope } from "./json_output.js";
+import { classifyError } from "./error_classification.js";
 import * as history from "./history.js";
 import * as approval from "./approval.js";
 import * as replHistory from "./repl_history.js";
@@ -554,10 +555,18 @@ async function main() {
           : e instanceof DeepSeekError
             ? `API error ${e.status ?? ""}: ${e.message}`
             : `error: ${(e as Error).message ?? e}`;
+      // Append an actionable recovery hint for the failures we can classify;
+      // interrupt/unknown messages keep the single-line system error shape.
+      let rendered = text;
+      if (!text.startsWith("(interrupted)")) {
+        const c = classifyError(text);
+        if (c.fix) rendered += `\nfix: ${c.fix}`;
+        if (c.next_actions?.length) rendered += `\nnext: ${c.next_actions.join(" · ")}`;
+      }
       setState((s) => ({
         history: [
           ...s.history,
-          { id: `e-${s.history.length}`, role: "system", content: text },
+          { id: `e-${s.history.length}`, role: "system", content: rendered },
         ],
       }));
     } finally {

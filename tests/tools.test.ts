@@ -1,4 +1,4 @@
-import { describe, it, before, beforeEach, afterEach } from "node:test";
+import { describe, it, before, beforeEach, after, afterEach } from "node:test";
 import assert from "node:assert/strict";
 import * as os from "node:os";
 import * as fs from "node:fs";
@@ -9,6 +9,12 @@ import * as path from "node:path";
 // enough (test bodies run after this module-init statement).
 process.env.DSC_NO_AUDIT = "1";
 
+// Approval policy reads from ~/.config/dsc/config.json. Point it at a throwaway
+// config dir so "always" persistence in one test can't leak into another.
+const OLD_XDG = process.env.XDG_CONFIG_HOME;
+const TMP_CONFIG = fs.mkdtempSync(path.join(os.tmpdir(), "dsc-tools-config-"));
+process.env.XDG_CONFIG_HOME = TMP_CONFIG;
+
 import {
   executeTool,
   filterToolSchemas,
@@ -17,7 +23,17 @@ import {
   type ToolContext,
 } from "../src/tools.js";
 import { setAsker, type ApprovalAnswer } from "../src/approval.js";
+import { _resetConfigCachesForTests } from "../src/api.js";
 import { getState, setState } from "../src/store.js";
+
+_resetConfigCachesForTests();
+
+after(() => {
+  _resetConfigCachesForTests();
+  if (OLD_XDG === undefined) delete process.env.XDG_CONFIG_HOME;
+  else process.env.XDG_CONFIG_HOME = OLD_XDG;
+  fs.rmSync(TMP_CONFIG, { recursive: true, force: true });
+});
 
 const WIN = process.platform === "win32";
 const TMP = fs.mkdtempSync(path.join(os.tmpdir(), "dsc-tools-test-"));
