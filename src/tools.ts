@@ -310,6 +310,22 @@ export const TOOL_SCHEMAS: ToolSchema[] = [
       },
     },
   },
+  {
+    type: "function",
+    function: {
+      name: "verify",
+      description:
+        "Run a project verification command (tests, typecheck, lint, or build) and return its output. Use after editing files to confirm the change passes before declaring it done; if it fails, fix the failure and run verify again. Approval-gated unless already allowed.",
+      parameters: {
+        type: "object",
+        properties: {
+          command: { type: "string", description: "Shell command to run the check, e.g. 'npm test' or 'npm run lint'." },
+          timeout_ms: { type: "integer", description: "Optional timeout in milliseconds (default 60000)." },
+        },
+        required: ["command"],
+      },
+    },
+  },
 ];
 
 export interface ToolContext {
@@ -505,6 +521,9 @@ export async function executeTool(
       break;
     case "git_commit":
       result = gitCommit(args, ctx);
+      break;
+    case "verify":
+      result = await runVerify(args, ctx, signal);
       break;
     default:
       result = { content: `error: unknown tool '${name}'`, audit: { error: "unknown_tool" } };
@@ -799,6 +818,25 @@ async function multiEdit(args: Record<string, unknown>, ctx: ToolContext): Promi
   return {
     content: `ok: applied ${edits.length} edit${edits.length === 1 ? "" : "s"} to ${abs} (${totalReplacements} replacement${totalReplacements === 1 ? "" : "s"})`,
     audit: { path: abs, edits: edits.length, replacements: totalReplacements },
+  };
+}
+
+async function runVerify(
+  args: Record<string, unknown>,
+  ctx: ToolContext,
+  signal?: AbortSignal,
+): Promise<ToolResult> {
+  const command = String(args.command ?? "");
+  if (!command) return { content: "error: missing 'command'", audit: { error: "missing_command" } };
+  const res = await runBash(
+    { command, timeout_ms: args.timeout_ms, description: "verification" },
+    ctx,
+    signal,
+  );
+  return {
+    content: `verification:\n${res.content}`,
+    rejected: res.rejected,
+    audit: { kind: "verify", command, ...(res.audit ?? {}) },
   };
 }
 

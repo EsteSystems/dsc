@@ -510,6 +510,20 @@ describe("bash", () => {
   });
 });
 
+describe("verify", () => {
+  it("runs the command and prefixes the output", async () => {
+    const r = await executeTool("verify", j({ command: "echo check-ok" }), ctx());
+    assert.match(r.content, /^verification:\n/);
+    assert.match(r.content, /check-ok/);
+    assert.equal(r.audit?.kind, "verify");
+  });
+
+  it("errors on a missing command", async () => {
+    const r = await executeTool("verify", j({}), ctx());
+    assert.match(r.content, /missing 'command'/);
+  });
+});
+
 // ---------------------------------------------------------------------------
 // grep  (skip the spawning tests on Windows, which may lack grep/rg)
 // ---------------------------------------------------------------------------
@@ -650,7 +664,7 @@ describe("tool surface", () => {
     for (const t of ["read_file", "list_dir", "grep", "glob", "web_search", "task_create", "task_list"]) {
       assert.ok(READ_ONLY_TOOLS.has(t), `${t} should be read-only`);
     }
-    for (const t of ["write_file", "edit_file", "multi_edit", "bash", "web_fetch"]) {
+    for (const t of ["write_file", "edit_file", "multi_edit", "bash", "web_fetch", "verify"]) {
       assert.ok(!READ_ONLY_TOOLS.has(t), `${t} should require approval`);
     }
   });
@@ -670,7 +684,7 @@ describe("tool surface", () => {
     const names = new Set(TOOL_SCHEMAS.map((s) => s.function.name));
     for (const t of [
       "read_file", "list_dir", "write_file", "edit_file", "multi_edit", "bash", "grep", "glob",
-      "web_fetch", "web_search", "task_create", "task_update", "task_list",
+      "web_fetch", "web_search", "task_create", "task_update", "task_list", "verify",
     ]) {
       assert.ok(names.has(t), `schema should advertise ${t}`);
     }
