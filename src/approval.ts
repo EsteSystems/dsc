@@ -1,6 +1,9 @@
 import * as readline from "node:readline/promises";
 import { stdin as input, stdout as output } from "node:process";
+import { promises as fsp } from "node:fs";
+import * as path from "node:path";
 import { createPatch } from "diff";
+import { configPath, getConfig } from "./api.js";
 
 const RESET = "\x1b[0m";
 const DIM = "\x1b[2m";
@@ -38,6 +41,75 @@ let activeAsker: Asker | null = null;
 
 export function setAsker(fn: Asker | null): void {
   activeAsker = fn;
+}
+
+// ── Deny-first approval policy ────────────────────────────────────────────
+// Deny rules always win — even under --yolo. Approve rules are persisted when
+// the user answers "always" so subsequent sessions skip the prompt for that
+// tool until the config entry is removed.
+
+interface ApprovalPolicy {
+  denyTools: Set<string>;
+  approveTools: Set<string>;
+}
+
+function toStringSet(value: unknown): Set<string> {
+  if (!Array.isArray(value)) return new Set();
+  return new Set(value.filter((v): v is string => typeof v === "string"));
+}
+
+function readApprovalPolicy(): ApprovalPolicy {
+  try {
+    const cfg = getConfig();
+    const approvals = cfg && typeof cfg === "object" ? (cfg as Record<string, unknown>).approvals : undefined;
+    const obj = approvals && typeof approvals === "object" ? (approvals as Record<string, unknown>) : {};
+    return {
+      denyTools: toStringSet(obj.deny_tools ?? obj.denyTools),
+      approveTools: toStringSet(obj.approve_tools ?? obj.approveTools),
+    };
+  } catch {
+    // Invalid config should not take down approval gating; fail closed with
+    // no deny/approve rules and let the interactive prompt decide.
+    return { denyTools: new Set(), approveTools: new Set() };
+  }
+}
+
+/** True when the tool is denied by config. Deny rules always win. */
+export function isToolDenied(tool: string): boolean {
+  return readApprovalPolicy().denyTools.has(tool);
+}
+
+/** True when the tool was permanently approved by a past "always" answer. */
+export function isToolPermanentlyApproved(tool: string): boolean {
+  return readApprovalPolicy().approveTools.has(tool);
+}
+
+/** Persist a tool to config.approvals.approveTools. Never throws — approval
+ *  gating shouldn't fail a tool call because a config write raced or failed. */
+export async function savePermanentApproval(tool: string): Promise<void> {
+  try {
+    const p = configPath();
+    await fsp.mkdir(path.dirname(p), { recursive: true });
+    let existing: Record<string, unknown> = {};
+    try {
+      let txt = await fsp.readFile(p, "utf8");
+      if (txt.charCodeAt(0) === 0xfeff) txt = txt.slice(1);
+      const parsed = JSON.parse(txt);
+      if (parsed && typeof parsed === "object") existing = parsed as Record<string, unknown>;
+    } catch {
+      // Missing or unparseable — start fresh.
+    }
+    const approvals = existing.approvals && typeof existing.approvals === "object"
+      ? (existing.approvals as Record<string, unknown>)
+      : {};
+    const existingList = toStringSet(approvals.approve_tools ?? approvals.approveTools);
+    existingList.add(tool);
+    approvals.approve_tools = [...existingList];
+    existing.approvals = approvals;
+    await fsp.writeFile(p, JSON.stringify(existing, null, 2), { encoding: "utf8", mode: 0o600 });
+  } catch {
+    // Permanent approval is best-effort; the session-scoped "always" still works.
+  }
 }
 
 /**

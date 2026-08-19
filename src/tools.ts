@@ -9,6 +9,9 @@ import {
   confirmEdit,
   confirmFetch,
   confirmWrite,
+  isToolDenied,
+  isToolPermanentlyApproved,
+  savePermanentApproval,
   type ApprovalAnswer,
 } from "./approval.js";
 import * as audit from "./audit.js";
@@ -386,13 +389,19 @@ async function gateApproval(
   toolName: string,
   prompt: () => Promise<ApprovalAnswer>,
 ): Promise<boolean> {
+  // Deny-first: config deny rules always win, even under --yolo.
+  if (isToolDenied(toolName)) return false;
   if (ctx.yolo) return true;
+  // Permanent "always" approvals survive process restarts (until removed from
+  // config); session approvals survive until /clear.
+  if (isToolPermanentlyApproved(toolName)) return true;
   if (ctx.sessionApprovals?.has(toolName)) return true;
   const ans = await prompt();
   if (ans === "no") return false;
   if (ans === "always") {
     if (!ctx.sessionApprovals) ctx.sessionApprovals = new Set();
     ctx.sessionApprovals.add(toolName);
+    void savePermanentApproval(toolName);
   }
   return true;
 }
