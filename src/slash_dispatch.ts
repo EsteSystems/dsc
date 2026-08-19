@@ -54,7 +54,7 @@ import { copyToClipboard } from "./clipboard.js";
 import type { MCPConnection } from "./mcp.js";
 import type { ToolContext } from "./tools.js";
 import { formatRelative } from "./history.js";
-import { runDelegate } from "./delegate.js";
+import { runDelegate, runPlanAgent } from "./delegate.js";
 import { promises as fsp } from "node:fs";
 import * as path from "node:path";
 
@@ -120,6 +120,7 @@ const HELP_LINES = [
   "/save <name>            name the current session",
   "/fork [name]             fork the current session into a new branch",
   "/delegate <prompt>       spawn a read-only sub-agent to investigate",
+  "/plan-agent <prompt>      spawn an isolated read-only planner",
   "/rename <text>          set assistant label for this session",
   "/model [name]           show available models or switch (routes to its provider)",
   "/yolo                   toggle approval mode",
@@ -229,6 +230,21 @@ export async function dispatchSlash(line: string, ctx: SlashContext): Promise<bo
         emit(result.content);
       } catch (e: any) {
         emit(`error: delegate failed: ${e.message}`);
+      }
+      return true;
+    }
+    case "plan-agent": {
+      const prompt = arg.trim();
+      if (!prompt) {
+        emit("usage: /plan-agent <prompt> — spawn an isolated read-only planner");
+        return true;
+      }
+      emit("planning (isolated sub-agent)…");
+      try {
+        const result = await runPlanAgent(prompt, ctx.cwd, ctx.getModel());
+        emit(result.content);
+      } catch (e: any) {
+        emit(`error: plan-agent failed: ${e.message}`);
       }
       return true;
     }

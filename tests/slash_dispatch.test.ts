@@ -128,6 +128,12 @@ describe("dispatchSlash routing", () => {
     assert.match(emitted[0], /\/exit/);
   });
 
+  it("/plan-agent with no prompt prints usage", async () => {
+    const { ctx, emitted } = makeCtx();
+    assert.equal(await dispatchSlash("/plan-agent", ctx), true);
+    assert.match(last(emitted), /usage: \/plan-agent/);
+  });
+
   it("/exit calls the exit action", async () => {
     const { ctx, calls } = makeCtx();
     await dispatchSlash("/exit", ctx);
