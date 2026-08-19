@@ -1,0 +1,23 @@
+{
+  "name": "verify after edit runs a check",
+  "prompt": "Change hello.txt and verify the result.",
+  "setup": {
+    "files": {
+      "hello.txt": "hello\n"
+    }
+  },
+  "script": [
+    {
+      "tool_calls": [{ "id": "e1", "name": "edit_file", "args": { "path": "hello.txt", "old_string": "hello", "new_string": "bye" } }]
+    },
+    {
+      "tool_calls": [{ "id": "v1", "name": "verify", "args": { "command": "grep -q bye hello.txt && echo verified" } }]
+    },
+    { "content": "done" }
+  ],
+  "assertions": {
+    "converged": true,
+    "tool_calls": ["edit_file", "verify"],
+    "result_contains": "verified"
+  }
+}

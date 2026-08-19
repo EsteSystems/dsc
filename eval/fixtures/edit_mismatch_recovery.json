@@ -1,0 +1,20 @@
+{
+  "name": "edit_file reports mismatches",
+  "prompt": "Edit hello.txt to replace the missing text.",
+  "setup": {
+    "files": {
+      "hello.txt": "hello\nworld\n"
+    }
+  },
+  "script": [
+    {
+      "tool_calls": [{ "id": "e1", "name": "edit_file", "args": { "path": "hello.txt", "old_string": "nope", "new_string": "replaced" } }]
+    },
+    { "content": "fixed" }
+  ],
+  "assertions": {
+    "converged": true,
+    "tool_calls": ["edit_file"],
+    "result_contains": "old_string not found"
+  }
+}
