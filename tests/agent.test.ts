@@ -303,6 +303,33 @@ describe("runAgent loop", () => {
     assert.deepEqual(ev.content, ["hel", "lo"]);
   });
 
+  it("injects an edit reminder into the next model call after a write", async () => {
+    const file = path.join(TMP, `reminder-${Date.now()}.txt`);
+    const { fn, sent } = scriptedTransport([
+      asstResp({
+        tool_calls: [tc("w1", "write_file", JSON.stringify({ path: file, content: "x" }))],
+      }),
+      asstResp({ content: "done" }),
+    ]);
+    const messages: Message[] = [{ role: "user", content: "make a file" }];
+    const { events } = recorder();
+
+    await runAgent({
+      model: "deepseek-v4-pro",
+      stats: newStats(),
+      toolCtx: ctx(TMP),
+      messages,
+      chatStream: fn,
+      events,
+    });
+
+    assert.ok(sent.length >= 2, "expected at least two model calls");
+    const secondSystem = sent[1].find((m) => m.role === "system")?.content;
+    assert.ok(secondSystem, "second call should have a system message");
+    assert.match(secondSystem as string, /Decision-time reminder/);
+    assert.match(secondSystem as string, /Run verify/);
+  });
+
   it("converts a tool throw into a synthetic error result, then re-throws", async () => {
     const { fn } = scriptedTransport([
       asstResp({ tool_calls: [tc("c1", "mcp_boom")] }),

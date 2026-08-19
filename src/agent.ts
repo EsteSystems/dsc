@@ -12,6 +12,7 @@ import { READ_ONLY_TOOLS, TOOL_SCHEMAS, executeTool, type ToolContext } from "./
 import { Spinner } from "./ui.js";
 import { buildSystemPrompt } from "./prompt.js";
 import { loadInstructions } from "./instructions.js";
+import { ReminderDetector } from "./reminders.js";
 
 /**
  * Structured events emitted by runAgent. When events is provided on RunOptions,
@@ -196,23 +197,28 @@ export async function runAgent(opts: RunOptions): Promise<void> {
   // prefix cache extends through it and into the message history.
   const conversationMessages = (): Message[] =>
     messages[0]?.role === "system" ? messages.slice(1) : messages.slice();
-  const buildApi = (): Message[] => [
-    {
-      role: "system",
-      content: buildSystemPrompt({
-        cwd: toolCtx.cwd,
-        date: new Date(),
-        summary: opts.getSummary?.(),
-        language: opts.language,
-        // Re-read on every turn so edits to AGENTS.md / instructions.md
-        // take effect immediately without restarting dsc. Synchronous IO
-        // on small files in the local cwd is well under a millisecond —
-        // negligible against a streaming API call.
-        instructions: loadInstructions(toolCtx.cwd),
-      }),
-    },
-    ...repairToolCallPairing(conversationMessages()),
-  ];
+  const reminders = new ReminderDetector();
+  const buildApi = (): Message[] => {
+    const base = buildSystemPrompt({
+      cwd: toolCtx.cwd,
+      date: new Date(),
+      summary: opts.getSummary?.(),
+      language: opts.language,
+      // Re-read on every turn so edits to AGENTS.md / instructions.md
+      // take effect immediately without restarting dsc. Synchronous IO
+      // on small files in the local cwd is well under a millisecond —
+      // negligible against a streaming API call.
+      instructions: loadInstructions(toolCtx.cwd),
+    });
+    const reminder = reminders.getReminder();
+    return [
+      {
+        role: "system",
+        content: reminder ? `${base}\n\nDecision-time reminder:\n${reminder}` : base,
+      },
+      ...repairToolCallPairing(conversationMessages()),
+    ];
+  };
 
   const maxAutoContinue = Math.max(0, Math.floor(opts.maxAutoContinue ?? 0));
   let autoContinues = 0;
@@ -279,6 +285,7 @@ export async function runAgent(opts: RunOptions): Promise<void> {
     type Pending = {
       index: number;
       call: (typeof toolCalls)[0];
+      name: string;
       fn: () => Promise<{ content: string; rejected?: boolean }>;
     };
     const ro: Pending[] = [];
@@ -326,17 +333,25 @@ export async function runAgent(opts: RunOptions): Promise<void> {
         }
       };
 
-      (interactive ? rw : ro).push({ index: i, call, fn: execute });
+      (interactive ? rw : ro).push({ index: i, call, name, fn: execute });
     }
 
     // Execute read-only tools in parallel, then read-write sequentially.
+    // `run` wraps each call so the reminder detector can see what happened
+    // (and how long it took) before the next model decision.
     const results = new Array<{ content: string; rejected?: boolean; _throwAfter?: unknown }>(toolCalls.length);
-    const roResults = await Promise.all(ro.map((p) => p.fn().then((r) => [p.index, r] as const)));
+    const run = async (p: Pending) => {
+      const started = Date.now();
+      const r = await p.fn();
+      reminders.onToolEnd(p.name, r.content, !!r.rejected, Date.now() - started);
+      return r;
+    };
+    const roResults = await Promise.all(ro.map((p) => run(p).then((r) => [p.index, r] as const)));
     for (const [idx, r] of roResults) results[idx] = r;
 
     let firstError: unknown = null;
     for (const p of rw) {
-      results[p.index] = await p.fn();
+      results[p.index] = await run(p);
     }
 
     // Record results in the original tool_call order and check for errors.
