@@ -39,6 +39,7 @@ import {
 } from "./agent.js";
 import type { AgentEvents } from "./agent.js";
 import type { ToolContext } from "./tools.js";
+import { buildOneShotEnvelope } from "./json_output.js";
 import * as history from "./history.js";
 import * as approval from "./approval.js";
 import * as replHistory from "./repl_history.js";
@@ -100,6 +101,7 @@ interface CliParse {
   resumeId?: string;
   model?: Model;
   modelExplicit?: boolean;
+  json?: boolean;
 }
 
 class CliError extends Error {}
@@ -115,6 +117,7 @@ function parseArgs(argv: string[]): CliParse {
     if (a === "--version" || a === "-v") out.version = true;
     else if (a === "--help" || a === "-h") out.help = true;
     else if (a === "--yolo" || a === "-y") out.yolo = true;
+    else if (a === "--json") out.json = true;
     else if (a === "--no-resume") out.noResume = true;
     else if (a === "--resume") {
       const v = argv[i + 1];
@@ -169,6 +172,7 @@ async function main() {
         "Flags:",
         "  -m, --model <name>             " + availableModels().join(" | "),
         "  -y, --yolo                     Skip approval prompts",
+        "      --json                     Emit a JSON envelope (one-shot only)",
         "      --no-resume                Don't auto-resume the latest session",
         "      --resume [id]              Resume the most recent (or by id)",
         "  -v, --version                  Print version and exit",
@@ -908,6 +912,31 @@ async function main() {
     const resolvedOneShot = await resolveAtFiles(cleanOneShot);
     messages.push({ role: "user", content: resolvedOneShot, ...(imgOneShot.length ? { images: imgOneShot } : {}) });
     pendingAbort = new AbortController();
+
+    let oneShotEvents: AgentEvents | undefined;
+    const oneShotToolCalls: Array<{ id: string; name: string; args: string; content: string; rejected: boolean }> = [];
+    const startedArgs = new Map<string, string>();
+    let oneShotResult = "";
+    if (cli.json) {
+      oneShotEvents = {
+        onAssistantStart: () => {},
+        onAssistantContent: () => {},
+        onAssistantReasoning: () => {},
+        onAssistantFinal: (_id, msg) => {
+          oneShotResult = msg.content;
+        },
+        onToolStart: (id, name, args) => {
+          startedArgs.set(id, args);
+        },
+        onToolEnd: (id, name, content, rejected) => {
+          oneShotToolCalls.push({ id, name, args: startedArgs.get(id) ?? "", content, rejected });
+        },
+        onNotice: () => {},
+      };
+    }
+
+    const startedAt = Date.now();
+    let runError: string | undefined;
     try {
       await runAgent({
         model,
@@ -923,18 +952,40 @@ async function main() {
         language: session.language,
         extraTools: mcpExtraTools(),
         dispatchExtraTool: mcpDispatch,
-        // No events: agent writes its assistant header, content, tool
-        // arrows, and notices directly to stdout — same as REPL one-shot.
+        // No events in plain one-shot mode: agent writes its assistant header,
+        // content, tool arrows, and notices directly to stdout. JSON mode
+        // supplies events so the agent emits nothing and we serialize the
+        // structured result below.
+        events: oneShotEvents,
       });
     } catch (e) {
-      if ((e as Error).name !== "AbortError" && !pendingAbort?.signal.aborted) {
-        process.stderr.write(
-          `\n${(e as Error).message ?? "error"}\n`,
-        );
+      const aborted = (e as Error).name === "AbortError" || pendingAbort?.signal.aborted;
+      runError = aborted ? "aborted" : ((e as Error).message ?? "error");
+      if (!aborted) {
+        process.stderr.write(`\n${runError}\n`);
       }
     }
+    const durationMs = Date.now() - startedAt;
     await persist();
-    process.stdout.write(`\n${formatCost(stats, model)}\n`);
+
+    if (cli.json) {
+      process.stdout.write(
+        JSON.stringify(
+          buildOneShotEnvelope({
+            ok: !runError,
+            error: runError,
+            result: oneShotResult,
+            toolCalls: oneShotToolCalls,
+            stats,
+            model,
+            durationMs,
+            sessionId: session.id,
+          }),
+        ) + "\n",
+      );
+    } else {
+      process.stdout.write(`\n${formatCost(stats, model)}\n`);
+    }
     process.exit(0);
   }
 
