@@ -262,6 +262,44 @@ describe("edit_file", () => {
     assert.equal(fs.readFileSync(f, "utf8"), "b b b");
   });
 
+  it("matches a trimmed old_string when the exact string is not found", async () => {
+    const f = tmpFile("edit-trim.txt");
+    fs.writeFileSync(f, "alpha beta gamma");
+    const r = await executeTool(
+      "edit_file",
+      j({ path: f, old_string: "beta  ", new_string: "delta" }),
+      ctx(),
+    );
+    assert.match(r.content, /ok: edited/);
+    assert.equal(r.audit?.match_mode, "trimmed");
+    assert.equal(fs.readFileSync(f, "utf8"), "alpha delta gamma");
+  });
+
+  it("matches whole lines ignoring leading/trailing whitespace for multi-line old_strings", async () => {
+    const f = tmpFile("edit-lines.txt");
+    fs.writeFileSync(f, "  alpha\n  beta\n  gamma\n");
+    const r = await executeTool(
+      "edit_file",
+      j({ path: f, old_string: "alpha\nbeta", new_string: "delta" }),
+      ctx(),
+    );
+    assert.match(r.content, /ok: edited/);
+    assert.equal(r.audit?.match_mode, "lines");
+    assert.equal(fs.readFileSync(f, "utf8"), "delta\n  gamma\n");
+  });
+
+  it("includes a file snippet when old_string is not found", async () => {
+    const f = tmpFile("edit-snippet.txt");
+    fs.writeFileSync(f, "one\ntwo\nthree");
+    const r = await executeTool(
+      "edit_file",
+      j({ path: f, old_string: "nope", new_string: "yep" }),
+      ctx(),
+    );
+    assert.match(r.content, /old_string not found/);
+    assert.match(r.content, /one\ntwo\nthree/);
+  });
+
   it("rejects an empty old_string", async () => {
     const f = tmpFile("edit5.txt");
     fs.writeFileSync(f, "x");
@@ -335,6 +373,22 @@ describe("multi_edit", () => {
     );
     assert.match(r.content, /ok: applied 2 edits/);
     assert.equal(fs.readFileSync(f, "utf8"), "three");
+  });
+
+  it("uses tolerant matching within edits", async () => {
+    const f = tmpFile("multi-fuzzy.txt");
+    fs.writeFileSync(f, "  one\n  two\n");
+    const r = await executeTool(
+      "multi_edit",
+      j({
+        path: f,
+        edits: [{ old_string: "one\ntwo", new_string: "three" }],
+      }),
+      ctx(),
+    );
+    assert.match(r.content, /ok: applied 1 edit/);
+    assert.equal(fs.readFileSync(f, "utf8"), "three\n");
+    assert.deepEqual(r.audit?.match_modes, ["lines"]);
   });
 
   it("supports replace_all within an edit", async () => {

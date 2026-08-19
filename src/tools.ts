@@ -81,7 +81,7 @@ export const TOOL_SCHEMAS: ToolSchema[] = [
     function: {
       name: "edit_file",
       description:
-        "Replace an exact substring in an existing file. old_string must appear exactly once unless replace_all is true.",
+        "Replace a substring in an existing file. Prefers an exact match; falls back to whitespace-tolerant matching when the exact old_string is not found. old_string must be unique unless replace_all is true.",
       parameters: {
         type: "object",
         properties: {
@@ -102,7 +102,7 @@ export const TOOL_SCHEMAS: ToolSchema[] = [
     function: {
       name: "multi_edit",
       description:
-        "Apply a sequence of edits to a single file in one atomic operation. Edits are applied in order, each operating on the result of the previous one; if any edit fails to match, nothing is written. Prefer this over multiple edit_file calls when making several changes to the same file.",
+        "Apply a sequence of edits to a single file in one atomic operation. Edits are applied in order, each operating on the result of the previous one; if any edit fails to match, nothing is written. Prefer this over multiple edit_file calls when making several changes to the same file. Each edit prefers an exact old_string and falls back to whitespace-tolerant matching.",
       parameters: {
         type: "object",
         properties: {
@@ -385,6 +385,97 @@ function withLineNumbers(text: string, offset = 1): string {
   const lines = text.split("\n");
   const width = String(offset + lines.length - 1).length;
   return lines.map((l, i) => `${String(offset + i).padStart(width, " ")}\t${l}`).join("\n");
+}
+
+// --- Tolerant edit matching ------------------------------------------------
+//
+// Exact old_string is the fast path. When it misses, the matcher falls back
+// to progressively relaxed strategies that still return a *contiguous*
+// original substring, so replacements preserve the file's real formatting
+// rather than inserting the model's slightly-wrong whitespace.
+
+interface TextMatch {
+  start: number;
+  end: number;
+  text: string;
+}
+
+function indexAll(text: string, needle: string): TextMatch[] {
+  const out: TextMatch[] = [];
+  if (!needle) return out;
+  let i = text.indexOf(needle);
+  while (i !== -1) {
+    out.push({ start: i, end: i + needle.length, text: needle });
+    i = text.indexOf(needle, i + needle.length);
+  }
+  return out;
+}
+
+/** Match `old.trim()` literally. Recovers leading/trailing whitespace near
+ *  misses without discarding surrounding whitespace that the model didn't
+ *  explicitly include. */
+function trimmedMatches(text: string, old: string): TextMatch[] {
+  const needle = old.trim();
+  if (!needle || needle === old) return [];
+  return indexAll(text, needle);
+}
+
+/** Match whole lines while ignoring each line's leading/trailing whitespace.
+ *  Only used for multi-line old_strings; a single line would otherwise match
+ *  too broadly (every line containing the trimmed text). */
+function lineMatches(text: string, old: string): TextMatch[] {
+  if (!old.includes("\n")) return [];
+  const oldLines = old.split("\n");
+  if (oldLines.length < 2) return [];
+  if (!oldLines.some((l) => l.trim().length > 0)) return [];
+
+  const textLines = text.split("\n");
+  const out: TextMatch[] = [];
+  for (let i = 0; i <= textLines.length - oldLines.length; i++) {
+    let ok = true;
+    for (let j = 0; j < oldLines.length; j++) {
+      if (textLines[i + j].trim() !== oldLines[j].trim()) {
+        ok = false;
+        break;
+      }
+    }
+    if (!ok) continue;
+    const start = i === 0 ? 0 : textLines.slice(0, i).join("\n").length + 1;
+    const matchText = textLines.slice(i, i + oldLines.length).join("\n");
+    out.push({ start, end: start + matchText.length, text: matchText });
+  }
+  return out;
+}
+
+interface EditMatchResult {
+  matches: TextMatch[];
+  mode: "exact" | "trimmed" | "lines" | "none";
+}
+
+function findEditMatches(text: string, old: string): EditMatchResult {
+  const exact = indexAll(text, old);
+  if (exact.length) return { matches: exact, mode: "exact" };
+  const trimmed = trimmedMatches(text, old);
+  if (trimmed.length) return { matches: trimmed, mode: "trimmed" };
+  const lines = lineMatches(text, old);
+  return lines.length ? { matches: lines, mode: "lines" } : { matches: [], mode: "none" };
+}
+
+function applyMatches(text: string, matches: TextMatch[], replacement: string): string {
+  let out = text;
+  for (const m of [...matches].sort((a, b) => b.start - a.start)) {
+    out = out.slice(0, m.start) + replacement + out.slice(m.end);
+  }
+  return out;
+}
+
+/** Small, deterministic excerpt used in not-found errors so the model can
+ *  recover without an extra read_file round-trip. */
+function fileSnippet(text: string, max = 4_000): string {
+  if (text.length <= max) return text;
+  const head = Math.floor(max * 0.6);
+  const tail = max - head;
+  return text.slice(0, head) + `\n…(snippet truncated: ${text.length - max} chars omitted)\n` + text.slice(-tail);
 }
 
 // Large tool outputs are the dominant context cost (70–80% of a long
@@ -694,22 +785,23 @@ async function editFile(args: Record<string, unknown>, ctx: ToolContext): Promis
   } catch (e: unknown) {
     return { content: `error: ${(e as Error).message}`, audit: { path: abs, error: "read_failed" } };
   }
-  const occurrences = current.split(oldString).length - 1;
+  const found = findEditMatches(current, oldString);
+  const occurrences = found.matches.length;
   if (occurrences === 0) {
     return {
-      content: `error: old_string not found in ${abs}`,
-      audit: { path: abs, error: "not_found" },
+      content: `error: old_string not found in ${abs}. Current file content:\n${fileSnippet(current)}`,
+      audit: { path: abs, error: "not_found", match_mode: found.mode },
     };
   }
   if (occurrences > 1 && !replaceAll) {
     return {
       content: `error: old_string is not unique in ${abs} (matches ${occurrences} times). Pass replace_all=true or include more surrounding context.`,
-      audit: { path: abs, error: "not_unique", occurrences },
+      audit: { path: abs, error: "not_unique", occurrences, match_mode: found.mode },
     };
   }
   const updated = replaceAll
-    ? current.split(oldString).join(newString)
-    : current.replace(oldString, newString);
+    ? applyMatches(current, found.matches, newString)
+    : applyMatches(current, [found.matches[0]], newString);
 
   const approvedEdit = await gateApproval(ctx, "edit_file", () =>
     confirmEdit(abs, current, updated),
@@ -725,7 +817,7 @@ async function editFile(args: Record<string, unknown>, ctx: ToolContext): Promis
   ctx.filesTouched.add(abs);
   return {
     content: `ok: edited ${abs} (${occurrences} replacement${occurrences === 1 ? "" : "s"})`,
-    audit: { path: abs, replacements: occurrences },
+    audit: { path: abs, replacements: occurrences, match_mode: found.mode },
   };
 }
 
@@ -777,31 +869,34 @@ async function multiEdit(args: Record<string, unknown>, ctx: ToolContext): Promi
   // result, matching how a human would stack them.
   let current = original;
   let totalReplacements = 0;
+  const matchModes: string[] = [];
   for (let i = 0; i < edits.length; i++) {
     const { old_string, new_string, replace_all } = edits[i];
-    const occurrences = current.split(old_string).length - 1;
+    const found = findEditMatches(current, old_string);
+    const occurrences = found.matches.length;
     if (occurrences === 0) {
       return {
-        content: `error: edit #${i + 1}: old_string not found${i > 0 ? " (after applying earlier edits)" : ""}`,
-        audit: { path: abs, error: "not_found", edit: i + 1 },
+        content: `error: edit #${i + 1}: old_string not found${i > 0 ? " (after applying earlier edits)" : ""}. Current file content:\n${fileSnippet(current)}`,
+        audit: { path: abs, error: "not_found", edit: i + 1, match_mode: found.mode },
       };
     }
     if (occurrences > 1 && !replace_all) {
       return {
         content: `error: edit #${i + 1}: old_string is not unique (matches ${occurrences} times). Pass replace_all=true or add surrounding context.`,
-        audit: { path: abs, error: "not_unique", edit: i + 1, occurrences },
+        audit: { path: abs, error: "not_unique", edit: i + 1, occurrences, match_mode: found.mode },
       };
     }
+    matchModes.push(found.mode);
     current = replace_all
-      ? current.split(old_string).join(new_string)
-      : current.replace(old_string, new_string);
+      ? applyMatches(current, found.matches, new_string)
+      : applyMatches(current, [found.matches[0]], new_string);
     totalReplacements += replace_all ? occurrences : 1;
   }
 
   if (current === original) {
     return {
       content: `error: edits produced no change to ${abs}`,
-      audit: { path: abs, error: "no_change" },
+      audit: { path: abs, error: "no_change", match_modes: matchModes },
     };
   }
 
@@ -810,14 +905,14 @@ async function multiEdit(args: Record<string, unknown>, ctx: ToolContext): Promi
     return {
       content: "rejected by user",
       rejected: true,
-      audit: { path: abs, edits: edits.length, replacements: totalReplacements },
+      audit: { path: abs, edits: edits.length, replacements: totalReplacements, match_modes: matchModes },
     };
   }
   await fs.writeFile(abs, current, "utf8");
   ctx.filesTouched.add(abs);
   return {
     content: `ok: applied ${edits.length} edit${edits.length === 1 ? "" : "s"} to ${abs} (${totalReplacements} replacement${totalReplacements === 1 ? "" : "s"})`,
-    audit: { path: abs, edits: edits.length, replacements: totalReplacements },
+    audit: { path: abs, edits: edits.length, replacements: totalReplacements, match_modes: matchModes },
   };
 }
 
