@@ -261,7 +261,9 @@ model with `-m <name>` at launch or `/model <name>` in the TUI.
 |---|---|---|
 | `deepseek-v4-pro` (default) | DeepSeek | `DEEPSEEK_API_KEY` / `api_key` |
 | `deepseek-v4-flash` | DeepSeek | `DEEPSEEK_API_KEY` / `api_key` |
-| `claude-sonnet-4-6` | Anthropic | `ANTHROPIC_API_KEY` / `providers.anthropic.api_key` |
+| `claude-sonnet-5` | Anthropic | `ANTHROPIC_API_KEY` / `providers.anthropic.api_key` |
+| `claude-opus-5` | Anthropic | `ANTHROPIC_API_KEY` / `providers.anthropic.api_key` |
+| `claude-fable-5` | Anthropic | `ANTHROPIC_API_KEY` / `providers.anthropic.api_key` |
 
 `/model` (no arg) lists the models available **right now** — a model
 only shows up once its provider has a key. DeepSeek always shows so the
@@ -288,7 +290,8 @@ export ANTHROPIC_API_KEY=sk-ant-...        # env (any shell)
 }
 ```
 
-Then `dsc -m claude-sonnet-4-6` or `/model claude-sonnet-4-6`. `/api-key`
+Then `dsc -m claude-sonnet-5` (or `/model claude-sonnet-5`; the
+`claude-opus-5` and `claude-fable-5` ids work the same way). `/api-key`
 with no argument shows every provider's key status at a glance.
 
 > OpenAI and Ollama aren't registered yet, but the OpenAI-compatible
