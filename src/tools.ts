@@ -17,6 +17,7 @@ import {
 import * as audit from "./audit.js";
 import { search as runSearchProvider, formatResults, getProvider, SearchError } from "./search.js";
 import { getState, setState, type AgentTask } from "./store.js";
+import { runPostToolHook, runPreToolHook } from "./hooks.js";
 
 export const READ_ONLY_TOOLS = new Set([
   "read_file",
@@ -604,6 +605,19 @@ export async function executeTool(
     return result;
   }
 
+  // Pre-tool hook can block a tool before dispatch. Deny-first: this happens
+  // even for yolo/read-only tools, so CI rules can override normal policy.
+  const pre = runPreToolHook(name, argsJson, ctx.cwd);
+  if (pre.blocked) {
+    const result: ToolResult = {
+      content: `blocked by pre_tool_use hook: ${pre.output || "(exit non-zero)"}`,
+      rejected: true,
+      audit: { hook: "pre_tool_use", hook_output: pre.output },
+    };
+    void writeAudit(name, ctx, result);
+    return result;
+  }
+
   let result: ToolResult;
   switch (name) {
     case "read_file":
@@ -660,6 +674,12 @@ export async function executeTool(
     default:
       result = { content: `error: unknown tool '${name}'`, audit: { error: "unknown_tool" } };
   }
+
+  const postNote = runPostToolHook(name, argsJson, ctx.cwd, result.content);
+  if (postNote) {
+    result = { ...result, content: `${result.content}\n[hook] ${postNote}` };
+  }
+
   void writeAudit(name, ctx, result);
   return result;
 }
