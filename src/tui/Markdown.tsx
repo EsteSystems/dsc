@@ -72,6 +72,9 @@ interface Props {
   source: string;
 }
 
+const TABLE_MAX_ROWS = 20;
+const TABLE_MAX_CELL_CHARS = 40;
+
 // React.memo on `source`: when the parent re-renders (e.g. every chunk
 // of a streaming turn) but the source we're handed hasn't changed, skip
 // the parse + ink tree rebuild entirely. The streaming pipeline relies
@@ -263,16 +266,25 @@ function Block({ block }: { block: ParsedBlock }) {
     // appear as literal text. Width measurement uses the stripped length so
     // columns line up regardless of how many cells were emphasized.
     const parsed = block.rows.map((r) => r.map(parseCellEmphasis));
-    const cols = Math.max(...parsed.map((r) => r.length));
+    // Cap cell content so a pathological one-liner can't push a table to
+    // hundreds of terminal columns. The full text stays available in the
+    // terminal scrollback via the original message; only the rendered row
+    // is clipped.
+    const cellText = (raw: string): string =>
+      raw.length > TABLE_MAX_CELL_CHARS
+        ? raw.slice(0, TABLE_MAX_CELL_CHARS - 1) + "…"
+        : raw;
+    const shown = parsed.slice(0, TABLE_MAX_ROWS);
+    const cols = Math.max(...shown.map((r) => r.length));
     const widths = new Array(cols).fill(0);
-    for (const r of parsed) {
+    for (const r of shown) {
       for (let j = 0; j < r.length; j++) {
-        widths[j] = Math.max(widths[j], r[j].text.length);
+        widths[j] = Math.max(widths[j], cellText(r[j].text).length);
       }
     }
     return (
       <Box flexDirection="column">
-        {parsed.map((row, i) => (
+        {shown.map((row, i) => (
           // Render the row as one Text node (not a nested Box) so each row
           // occupies exactly one terminal line and there's no flexbox-driven
           // gap between rows. Bold spans inside the row are emitted as
@@ -285,14 +297,15 @@ function Block({ block }: { block: ParsedBlock }) {
               // character would push the line over the terminal width, ink
               // would wrap them onto a new line, and that line would render
               // as a phantom blank between rows.
+              const display = cellText(cell.text);
               const isLast = j === row.length - 1;
               const pad = isLast
                 ? ""
-                : " ".repeat(Math.max(0, widths[j] - cell.text.length));
+                : " ".repeat(Math.max(0, widths[j] - display.length));
               const sep = isLast ? "" : " │ ";
               return (
                 <Text key={j}>
-                  <Text bold={cell.bold}>{cell.text}</Text>
+                  <Text bold={cell.bold}>{display}</Text>
                   {pad}
                   {sep}
                 </Text>
@@ -300,6 +313,9 @@ function Block({ block }: { block: ParsedBlock }) {
             })}
           </Text>
         ))}
+        {parsed.length > TABLE_MAX_ROWS ? (
+          <Text dimColor>… ({parsed.length - TABLE_MAX_ROWS} more table rows)</Text>
+        ) : null}
       </Box>
     );
   }
