@@ -117,7 +117,7 @@ function parseArgs(argv: string[]): CliParse {
     if (a === "--version" || a === "-v") out.version = true;
     else if (a === "--help" || a === "-h") out.help = true;
     else if (a === "--yolo" || a === "-y") out.yolo = true;
-    else if (a === "--json") out.json = true;
+    else if (a === "--json" || a === "--porcelain") out.json = true;
     else if (a === "--no-resume") out.noResume = true;
     else if (a === "--resume") {
       const v = argv[i + 1];
@@ -173,6 +173,7 @@ async function main() {
         "  -m, --model <name>             " + availableModels().join(" | "),
         "  -y, --yolo                     Skip approval prompts",
         "      --json                     Emit a JSON envelope (one-shot only)",
+        "      --porcelain                Alias for --json",
         "      --no-resume                Don't auto-resume the latest session",
         "      --resume [id]              Resume the most recent (or by id)",
         "  -v, --version                  Print version and exit",

@@ -52,6 +52,30 @@ describe("buildOneShotEnvelope", () => {
     assert.deepEqual(env.tool_calls?.[0].args, { path: "a.txt" });
   });
 
+  it("classifies a common edit mismatch with fix and next_actions", () => {
+    const env = buildOneShotEnvelope({
+      ok: false,
+      error: "error: old_string not found in /tmp/foo.ts",
+    });
+    assert.equal(env.ok, false);
+    assert.match(env.fix ?? "", /Re-read the target file/);
+    assert.deepEqual(env.next_actions, [
+      "read_file the target path",
+      "retry edit_file with corrected old_string",
+    ]);
+  });
+
+  it("lets explicit fix and next_actions override classification", () => {
+    const env = buildOneShotEnvelope({
+      ok: false,
+      error: "old_string not found",
+      fix: "custom fix",
+      nextActions: ["step 1"],
+    });
+    assert.equal(env.fix, "custom fix");
+    assert.deepEqual(env.next_actions, ["step 1"]);
+  });
+
   it("keeps unparseable tool args as the raw string", () => {
     const env = buildOneShotEnvelope({
       ok: true,

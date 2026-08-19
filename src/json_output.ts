@@ -31,6 +31,10 @@ export interface OneShotEnvelope {
   duration_ms?: number;
   session_id?: string;
   model?: string;
+  /** Short actionable recovery hint when ok=false. */
+  fix?: string;
+  /** Concrete follow-ups the caller can take or prompt the agent with. */
+  next_actions?: string[];
 }
 
 function parseToolArgs(raw: string): unknown {
@@ -40,6 +44,57 @@ function parseToolArgs(raw: string): unknown {
   } catch {
     return raw;
   }
+}
+
+interface ErrorClassification {
+  fix?: string;
+  next_actions?: string[];
+}
+
+/** Best-effort classification for the failures we can recover from without
+ *  a human. Kept intentionally broad so unknown errors still get a generic
+ *  "inspect and retry" hint rather than no hint at all. */
+function classifyError(error: string): ErrorClassification {
+  const e = error.toLowerCase();
+  if (e.includes("api key") || e.includes("apikey") || e.includes("unauthorized") || e.includes("authentication")) {
+    return {
+      fix: "Configure an API key with /api-key or set DEEPSEEK_API_KEY.",
+      next_actions: ["/api-key sk-...", "export DEEPSEEK_API_KEY=sk-..."],
+    };
+  }
+  if (e.includes("old_string not found")) {
+    return {
+      fix: "Re-read the target file and retry edit_file with the current exact content.",
+      next_actions: ["read_file the target path", "retry edit_file with corrected old_string"],
+    };
+  }
+  if (e.includes("old_string is not unique")) {
+    return {
+      fix: "Add more surrounding context or pass replace_all=true if replacing every match is intended.",
+      next_actions: ["read_file the target path", "retry edit_file with more context or replace_all=true"],
+    };
+  }
+  if (e.includes("budget reached")) {
+    return {
+      fix: "Raise or clear the budget with /budget.",
+      next_actions: ["/budget <amount>", "/budget off"],
+    };
+  }
+  if (e.includes("timeout")) {
+    return {
+      fix: "Use bash_status with background=true for long-running commands, or raise timeout_ms.",
+      next_actions: ["rerun with background=true and poll bash_status", "raise timeout_ms and retry"],
+    };
+  }
+  if (e.includes("max_tool_depth") || e.includes("auto_continue")) {
+    return {
+      fix: "The agent did not converge. Split the work into smaller explicit steps and retry.",
+      next_actions: ["retry with a narrower prompt", "ask the agent to do one step at a time"],
+    };
+  }
+  return {
+    fix: "Inspect the error and retry with adjusted arguments or a narrower prompt.",
+  };
 }
 
 export interface OneShotEnvelopeInput {
@@ -57,6 +112,8 @@ export interface OneShotEnvelopeInput {
   model?: Model;
   durationMs?: number;
   sessionId?: string;
+  fix?: string;
+  nextActions?: string[];
 }
 
 export function buildOneShotEnvelope(input: OneShotEnvelopeInput): OneShotEnvelope {
@@ -65,6 +122,11 @@ export function buildOneShotEnvelope(input: OneShotEnvelopeInput): OneShotEnvelo
   };
 
   if (input.error) env.error = input.error;
+  const classification = input.error ? classifyError(input.error) : {};
+  const fix = input.fix ?? classification.fix;
+  if (fix) env.fix = fix;
+  const nextActions = input.nextActions ?? classification.next_actions;
+  if (nextActions && nextActions.length > 0) env.next_actions = nextActions;
   if (input.result !== undefined) env.result = input.result;
   if (input.toolCalls && input.toolCalls.length > 0) {
     env.tool_calls = input.toolCalls.map((t) => ({
