@@ -5,6 +5,21 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+## [1.7.0] - 2026-08-19
+
+### Added
+- **Plan subagent** (`/plan-agent <prompt>`) — isolated read-only planner with its own schema and 2-minute timeout; returns a numbered plan. Complements `/delegate`'s read-only investigator.
+- **Lifecycle hooks** — config-driven `hooks.pre_tool_use` / `hooks.post_tool_use` in `~/.config/dsc/config.json`. Pre hooks can block a tool; post hooks append `[hook]` notes. `DSC_TOOL_NAME` / `DSC_TOOL_ARGS` are injected into the hook environment. Wildcard `*` matches any tool.
+- **Tamper-evident audit log** — audit records are now hash-chained (`seq`, `prev_hash`, `hash`). `/audit verify` replays the JSONL log and reports the first sequence gap or hash mismatch.
+- **Deterministic eval harness** — `npm run eval` drives `runAgent` with scripted no-network transports and JSON fixtures under `eval/fixtures/`. Supports `--threshold` and fixture globs.
+- **Tunable tool-output truncation** — `DSC_TOOL_OUTPUT_MAX_CHARS` overrides the 8k context-compression budget; `npm run tune` sweeps thresholds and recommends the lowest value that keeps head/tail sentinels.
+- **Shared actionable error classification** — `classifyError()` now powers both TUI and JSON error surfaces with `fix:` / `next:` guidance.
+
+### Changed
+- `compressToolOutput()` and `toolOutputMaxChars()` are exported from `agent.ts` for experiments/tests.
+
 ## [1.6.0] - 2026-06-13
 
 ### Added
@@ -20,8 +35,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `Message` interface gains optional `images` field for pre-encoded vision payloads.
 - `SessionMeta` / `SessionFileV2` / `SessionState` gain optional `forked_from` field.
 - `/list` now shows `← fork` for sessions created via `/fork`.
-
-## [Unreleased]
 
 ## [1.5.0] - 2026-06-13
 
