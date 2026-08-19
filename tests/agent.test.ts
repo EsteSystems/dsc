@@ -10,6 +10,8 @@ import {
   formatStatus,
   formatCost,
   MAX_TOOL_DEPTH,
+  compressToolOutput,
+  toolOutputMaxChars,
   type AgentEvents,
 } from "../src/agent.js";
 import {
@@ -182,6 +184,35 @@ describe("repairToolCallPairing", () => {
     const len = msgs.length;
     repairToolCallPairing(msgs);
     assert.equal(msgs.length, len, "input must be left intact");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// tool-output truncation
+// ---------------------------------------------------------------------------
+
+describe("tool-output truncation", () => {
+  it("defaults to 8k and honors DSC_TOOL_OUTPUT_MAX_CHARS", () => {
+    const old = process.env.DSC_TOOL_OUTPUT_MAX_CHARS;
+    try {
+      delete process.env.DSC_TOOL_OUTPUT_MAX_CHARS;
+      assert.equal(toolOutputMaxChars(), 8_000);
+      process.env.DSC_TOOL_OUTPUT_MAX_CHARS = "2000";
+      assert.equal(toolOutputMaxChars(), 2_000);
+      process.env.DSC_TOOL_OUTPUT_MAX_CHARS = "bogus";
+      assert.equal(toolOutputMaxChars(), 8_000);
+    } finally {
+      if (old === undefined) delete process.env.DSC_TOOL_OUTPUT_MAX_CHARS;
+      else process.env.DSC_TOOL_OUTPUT_MAX_CHARS = old;
+    }
+  });
+
+  it("keeps head and tail markers and drops the middle when truncating", () => {
+    const marker = "__M__";
+    const head = marker + "x".repeat(500);
+    const tail = "x".repeat(500) + marker;
+    assert.ok(compressToolOutput(head, 400).includes(marker));
+    assert.ok(compressToolOutput(tail, 400).includes(marker));
   });
 });
 

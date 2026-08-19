@@ -173,10 +173,19 @@ export interface RunOptions {
   chatStream?: typeof chatStream;
 }
 
+/** Effective tool-output budget. Tune with DSC_TOOL_OUTPUT_MAX_CHARS for
+ *  experiments; defaults to 8 000 chars (~2k tokens). */
+export function toolOutputMaxChars(): number {
+  const raw = process.env.DSC_TOOL_OUTPUT_MAX_CHARS;
+  if (!raw) return 8_000;
+  const n = Number(raw);
+  return Number.isFinite(n) && n > 0 ? Math.floor(n) : 8_000;
+}
+
 /** Compress long tool outputs to keep the context window from ballooning.
  *  Keeps the first 60% and last 30% of the output; the middle is replaced
- *  with a one-line summary.  Smaller than 8 000 chars pass through untouched. */
-function compressToolOutput(text: string, maxChars = 8_000): string {
+ *  with a one-line summary.  Outputs under the budget pass through untouched. */
+export function compressToolOutput(text: string, maxChars = toolOutputMaxChars()): string {
   if (text.length <= maxChars) return text;
   const head = Math.floor(maxChars * 0.6);
   const tail = Math.floor(maxChars * 0.3);

@@ -38,6 +38,7 @@
     "typecheck": "tsc -p . --noEmit",
     "test": "node --import tsx --test",
     "eval": "tsx scripts/eval.ts",
+    "tune": "tsx scripts/tune_thresholds.ts",
     "start": "node dist/tui.js",
     "package": "node scripts/package.mjs",
     "prepack": "node scripts/build.mjs"
