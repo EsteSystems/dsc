@@ -7,6 +7,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.7.2] - 2026-08-19
+
+### Fixed
+- **TUI status bar no longer shows the estimated `$` cost.** The ink status bar had its own render path separate from `formatStatus`; removed the price from it and updated the README diagram.
+
 ## [1.7.1] - 2026-08-19
 
 ### Changed
@@ -313,7 +318,8 @@ Initial public release.
 - DECSTBM-pinned status bar.
 - Cross-platform packaging (`npm pack` + per-OS installer scripts).
 
-[Unreleased]: https://github.com/EsteSystems/dsc/compare/v1.7.1...HEAD
+[Unreleased]: https://github.com/EsteSystems/dsc/compare/v1.7.2...HEAD
+[1.7.2]: https://github.com/EsteSystems/dsc/compare/v1.7.1...v1.7.2
 [1.7.1]: https://github.com/EsteSystems/dsc/compare/v1.7.0...v1.7.1
 [1.7.0]: https://github.com/EsteSystems/dsc/compare/v1.6.0...v1.7.0
 [1.6.0]: https://github.com/EsteSystems/dsc/compare/v1.5.0...v1.6.0
