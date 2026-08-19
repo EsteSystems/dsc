@@ -298,6 +298,7 @@ async function main() {
     setState({
       model,
       contextTokens: estimateContextTokens(messages),
+      lastPromptTokens: stats.last_prompt_tokens,
       sessionSeconds: Math.floor((Date.now() - sessionStart) / 1000),
       inTokens: stats.prompt_tokens,
       outTokens: stats.completion_tokens,

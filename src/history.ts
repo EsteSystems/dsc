@@ -117,6 +117,7 @@ function statsFromPersisted(s: SessionFileV2["stats"] | undefined): Stats {
   stats.prompts = s.prompts ?? 0;
   stats.responses = s.responses ?? 0;
   stats.prompt_tokens = s.prompt_tokens ?? 0;
+  stats.last_prompt_tokens = s.last_prompt_tokens ?? 0;
   stats.completion_tokens = s.completion_tokens ?? 0;
   stats.total_tokens = s.total_tokens ?? 0;
   stats.cache_hit_tokens = s.cache_hit_tokens ?? 0;
@@ -132,6 +133,7 @@ function statsToPersisted(stats: Stats): SessionFileV2["stats"] {
     prompts: stats.prompts,
     responses: stats.responses,
     prompt_tokens: stats.prompt_tokens,
+    last_prompt_tokens: stats.last_prompt_tokens,
     completion_tokens: stats.completion_tokens,
     total_tokens: stats.total_tokens,
     cache_hit_tokens: stats.cache_hit_tokens,

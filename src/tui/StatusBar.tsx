@@ -48,11 +48,17 @@ export function StatusBar() {
       : "";
 
   const ctxWindow = modelSpec(s.model).contextWindow;
-  const ctxPct = ctxWindow ? Math.round((s.contextTokens / ctxWindow) * 100) : null;
+  // Prefer the API-reported last request size; it includes the system prompt,
+  // tool schemas, and provider-injected content that the local char/4
+  // estimate misses. Until the first response arrives, fall back to the
+  // estimate and mark it approximate.
+  const ctxTokens = s.lastPromptTokens > 0 ? s.lastPromptTokens : s.contextTokens;
+  const ctxApproximate = s.lastPromptTokens <= 0;
+  const ctxPct = ctxWindow ? Math.round((ctxTokens / ctxWindow) * 100) : null;
   const ctxLabel =
     ctxWindow && ctxPct !== null
-      ? `ctx:${formatCount(s.contextTokens)}/${formatCount(ctxWindow)} (${ctxPct}%)`
-      : `ctx:${formatCount(s.contextTokens)}`;
+      ? `${ctxApproximate ? "~ctx:" : "ctx:"}${formatCount(ctxTokens)}/${formatCount(ctxWindow)} (${ctxPct}%)`
+      : `${ctxApproximate ? "~ctx:" : "ctx:"}${formatCount(ctxTokens)}`;
   // Color the ctx label when approaching the context window: yellow at 80%,
   // red at 95%. The inverse background swaps fg/bg; these colors stay legible.
   const ctxColor =

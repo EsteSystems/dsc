@@ -1209,6 +1209,11 @@ export interface Stats {
   prompts: number;
   responses: number;
   prompt_tokens: number;
+  /** `usage.prompt_tokens` from the most recent API call. This is the
+   *  authoritative size of the last request payload (system prompt + tools +
+   *  conversation), unlike local estimates which miss provider-injected
+   *  content. 0 until the first response arrives. */
+  last_prompt_tokens: number;
   completion_tokens: number;
   total_tokens: number;
   cache_hit_tokens: number;
@@ -1223,6 +1228,7 @@ export function newStats(): Stats {
     prompts: 0,
     responses: 0,
     prompt_tokens: 0,
+    last_prompt_tokens: 0,
     completion_tokens: 0,
     total_tokens: 0,
     cache_hit_tokens: 0,
@@ -1237,6 +1243,7 @@ export function recordUsage(stats: Stats, usage: Usage | undefined): void {
   stats.responses += 1;
   if (!usage) return;
   stats.prompt_tokens += usage.prompt_tokens ?? 0;
+  stats.last_prompt_tokens = usage.prompt_tokens ?? 0;
   stats.completion_tokens += usage.completion_tokens ?? 0;
   stats.total_tokens += usage.total_tokens ?? 0;
   stats.cache_hit_tokens += usage.prompt_cache_hit_tokens ?? 0;

@@ -69,6 +69,10 @@ export interface StoreState {
   outTokens: number;
   cacheHitTokens: number;
   cacheMissTokens: number;
+  /** API-reported `prompt_tokens` from the most recent response. 0 until
+   *  the first response. StatusBar uses this as the authoritative ctx value
+   *  and falls back to `contextTokens` when it is unavailable. */
+  lastPromptTokens: number;
   contextTokens: number;
   toolCalls: number;
   sessionSeconds: number;
@@ -101,6 +105,7 @@ let state: StoreState = {
   outTokens: 0,
   cacheHitTokens: 0,
   cacheMissTokens: 0,
+  lastPromptTokens: 0,
   contextTokens: 0,
   toolCalls: 0,
   sessionSeconds: 0,
