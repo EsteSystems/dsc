@@ -156,6 +156,10 @@ export interface RunOptions {
   /** Additional tool schemas to advertise to the model. Used by MCP — each
    *  entry's name starts with `mcp_<server>_` so the dispatcher can route. */
   extraTools?: import("./api.js").ToolSchema[];
+  /** When provided, replaces the default built-in TOOL_SCHEMAS. Read-only
+   *  modes and subagents use this to remove write/bash tools from the schema
+   *  rather than relying only on runtime permission prompts. */
+  toolSchemas?: import("./api.js").ToolSchema[];
   /** Optional dispatcher for tools whose name starts with `mcp_`. Called
    *  in lieu of the built-in `executeTool` switch. */
   dispatchExtraTool?: (
@@ -245,9 +249,7 @@ export async function runAgent(opts: RunOptions): Promise<void> {
         // doesn't affect dispatch (we route on the mcp_ prefix), but
         // keeping built-ins first is a stable, predictable shape in
         // the prompt for the model.
-        tools: opts.extraTools?.length
-          ? TOOL_SCHEMAS.concat(opts.extraTools)
-          : TOOL_SCHEMAS,
+        tools: (opts.toolSchemas ?? TOOL_SCHEMAS).concat(opts.extraTools ?? []),
         signal,
         onContent: handlers.onContent,
         onReasoning: handlers.onReasoning,

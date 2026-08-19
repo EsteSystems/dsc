@@ -9,7 +9,7 @@
 import { randomUUID } from "node:crypto";
 import { runAgent } from "./agent.js";
 import { newStats, DEFAULT_MODEL, type Model, type Message, type ToolSchema } from "./api.js";
-import type { ToolContext } from "./tools.js";
+import { filterToolSchemas, type ToolContext } from "./tools.js";
 
 const DELEGATE_TIMEOUT_MS = 120_000; // 2 minutes max
 
@@ -17,74 +17,14 @@ const DELEGATE_TIMEOUT_MS = 120_000; // 2 minutes max
  * Schema subset for delegated sub-agents — read-only tools only.
  * No bash, no write/edit, no git_commit. git_diff is allowed.
  */
-const DELEGATE_TOOL_SCHEMAS: ToolSchema[] = [
-  {
-    type: "function",
-    function: {
-      name: "read_file",
-      parameters: {
-        type: "object",
-        properties: {
-          path: { type: "string" },
-          offset: { type: "integer" },
-          limit: { type: "integer" },
-        },
-        required: ["path"],
-      },
-      description: "Read a file.",
-    },
-  },
-  {
-    type: "function",
-    function: {
-      name: "grep",
-      parameters: {
-        type: "object",
-        properties: {
-          pattern: { type: "string" },
-          path: { type: "string" },
-          glob: { type: "string" },
-        },
-        required: ["pattern"],
-      },
-      description: "Search file contents.",
-    },
-  },
-  {
-    type: "function",
-    function: {
-      name: "glob",
-      parameters: {
-        type: "object",
-        properties: { pattern: { type: "string" } },
-        required: ["pattern"],
-      },
-      description: "List files matching a glob.",
-    },
-  },
-  {
-    type: "function",
-    function: {
-      name: "list_dir",
-      parameters: {
-        type: "object",
-        properties: { path: { type: "string" } },
-      },
-      description: "List directory entries.",
-    },
-  },
-  {
-    type: "function",
-    function: {
-      name: "git_diff",
-      parameters: {
-        type: "object",
-        properties: { staged: { type: "boolean" } },
-      },
-      description: "Show git diff.",
-    },
-  },
-];
+const DELEGATE_ALLOWED_TOOLS = new Set([
+  "read_file",
+  "grep",
+  "glob",
+  "list_dir",
+  "git_diff",
+]);
+const DELEGATE_TOOL_SCHEMAS: ToolSchema[] = filterToolSchemas(DELEGATE_ALLOWED_TOOLS);
 
 const DELEGATE_SYSTEM = `You are a delegated sub-agent. Your job is to investigate, analyze, and produce a structured report in response to the task below. Rules:
 
@@ -137,7 +77,7 @@ export async function runDelegate(
       messages,
       signal: controller.signal,
       maxAutoContinue: 0,
-      extraTools: DELEGATE_TOOL_SCHEMAS,
+      toolSchemas: DELEGATE_TOOL_SCHEMAS,
       events: undefined,
     });
   } catch (e: any) {

@@ -350,6 +350,13 @@ export const TOOL_SCHEMAS: ToolSchema[] = [
   },
 ];
 
+/** Return only the built-in schemas whose names are in `allowed`. Used by
+ *  read-only modes and subagents to remove write/bash tools from the model's
+ *  schema entirely — stronger than runtime permission checks. */
+export function filterToolSchemas(allowed: ReadonlySet<string>): ToolSchema[] {
+  return TOOL_SCHEMAS.filter((s) => allowed.has(s.function.name));
+}
+
 export interface ToolContext {
   cwd: string;
   yolo: boolean;

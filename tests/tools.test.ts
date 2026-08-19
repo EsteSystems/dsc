@@ -11,6 +11,7 @@ process.env.DSC_NO_AUDIT = "1";
 
 import {
   executeTool,
+  filterToolSchemas,
   READ_ONLY_TOOLS,
   TOOL_SCHEMAS,
   type ToolContext,
@@ -762,6 +763,14 @@ describe("tool surface", () => {
       assert.equal(typeof s.function.description, "string");
       assert.equal(typeof s.function.parameters, "object");
     }
+  });
+
+  it("filterToolSchemas drops every disallowed built-in", () => {
+    const schemas = filterToolSchemas(new Set(["read_file", "glob"]));
+    assert.deepEqual(
+      new Set(schemas.map((s) => s.function.name)),
+      new Set(["read_file", "glob"]),
+    );
   });
 
   it("advertises the documented built-in tools", () => {

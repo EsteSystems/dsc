@@ -252,6 +252,38 @@ describe("runAgent loop", () => {
     assert.equal(ev.toolEnds[0].rejected, false);
   });
 
+  it("advertises only toolSchemas when provided, not the built-in set", async () => {
+    let sentTools: Array<{ function: { name: string } }> | undefined;
+    const fn = async (o: { tools?: Array<{ function: { name: string } }> }) => {
+      sentTools = o.tools;
+      return asstResp({ content: "done" });
+    };
+    const messages: Message[] = [{ role: "user", content: "probe" }];
+
+    await runAgent({
+      model: "deepseek-v4-pro",
+      stats: newStats(),
+      toolCtx: ctx(TMP),
+      messages,
+      chatStream: fn,
+      toolSchemas: [
+        {
+          type: "function",
+          function: {
+            name: "read_file",
+            description: "Read a file.",
+            parameters: { type: "object", properties: {}, required: [] },
+          },
+        },
+      ],
+    });
+
+    assert.deepEqual(
+      sentTools?.map((t) => t.function.name),
+      ["read_file"],
+    );
+  });
+
   it("routes non-mcp names to the built-in executor (read_file)", async () => {
     const file = path.join(TMP, "hello.txt");
     fs.writeFileSync(file, "line one\nline two\n");
