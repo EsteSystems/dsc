@@ -20,7 +20,6 @@ const STATUS_KEYS = [
   "cacheMissTokens",
   "lastPromptTokens",
   "contextTokens",
-  "cost",
   "inTokens",
   "outTokens",
   "queueDepth",
@@ -88,7 +87,7 @@ export function StatusBar() {
     : undefined;
 
   const leftBeforeCtx =
-    `${s.model}${flags} · ${s.cost.toFixed(4)}  ` +
+    `${s.model}${flags}  ` +
     `▲${formatCount(s.inTokens)}${cache} ▼${formatCount(s.outTokens)}  `;
   const afterCtx = s.queueDepth > 0 ? `  queued:${s.queueDepth}` : "";
   const fullLeft = leftBeforeCtx + ctxLabel + afterCtx;

@@ -325,8 +325,8 @@ dsc --resume <id>                    # resume a specific session by id
   → run the tests again
   → and commit
   > _                        ← your prompt input
-   deepseek-v4-pro · $0.012  ▲1.4K (h:1.1K m:300) ▼820  ctx:9.2K   0:34
-   ↑ status bar (model · cost · in/out tokens · cache hit/miss · ctx · timer)
+   deepseek-v4-pro  ▲1.4K (h:1.1K m:300) ▼820  ctx:9.2K   0:34
+   ↑ status bar (model · in/out tokens · cache hit/miss · ctx · timer)
 ```
 
 The streaming current-turn renders plain text so re-renders stay cheap;
