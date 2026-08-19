@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+- **Status bar drops the estimated `$` cost.** The status line now shows model + token/cache counters and context/session state only; use `/cost` or `/budget` for the billable estimate.
+- **Auto-compact is model-aware.** The default threshold is now 10% of the active model's context window, clamped to `[32_000, 96_000]`, and keeps 12 user turns by default. `DSC_AUTO_COMPACT_AT` / `DSC_AUTO_COMPACT_KEEP` still override.
+
 ## [1.7.0] - 2026-08-19
 
 ### Added

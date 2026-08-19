@@ -36,6 +36,8 @@ import {
   runAgent,
   formatCost,
   estimateContextTokens,
+  autoCompactAtTokens,
+  autoCompactKeepTurns,
 } from "./agent.js";
 import type { AgentEvents } from "./agent.js";
 import type { ToolContext } from "./tools.js";
@@ -77,20 +79,6 @@ function parsePlanTasks(text: string): { id: number; text: string; done: boolean
   }
   return tasks;
 }
-
-// Auto-compact threshold (token-count of estimated context). Default
-// 50K — well below the 1M model limit, but tuned to keep per-turn input
-// cost from creeping. Override via DSC_AUTO_COMPACT_AT; set to "0" /
-// "off" / "false" to disable. Default 20K — tuned to keep per-turn
-// input cost reasonable without losing too much context to summaries.
-const AUTO_COMPACT_AT_TOKENS = (() => {
-  const raw = process.env.DSC_AUTO_COMPACT_AT;
-  if (!raw) return 20_000;
-  if (raw === "0" || raw === "off" || raw === "false") return 0;
-  const n = parseInt(raw, 10);
-  return Number.isFinite(n) && n > 0 ? n : 20_000;
-})();
-const AUTO_COMPACT_KEEP = Number(process.env.DSC_AUTO_COMPACT_KEEP ?? "8") || 8;
 
 interface CliParse {
   prompt?: string;
@@ -617,10 +605,11 @@ async function main() {
             }
           }
         }
-        if (AUTO_COMPACT_AT_TOKENS > 0) {
+        const compactAt = autoCompactAtTokens(model);
+        if (compactAt > 0) {
           const ctx = estimateContextTokens(messages);
-          if (ctx > AUTO_COMPACT_AT_TOKENS) {
-            await runCompaction(AUTO_COMPACT_KEEP, true);
+          if (ctx > compactAt) {
+            await runCompaction(autoCompactKeepTurns(), true);
           }
         }
       }
@@ -664,7 +653,7 @@ async function main() {
       (n, m) => n + (typeof m.content === "string" ? m.content.length : 0),
       0,
     );
-    if (auto) info(`── auto-compact (ctx > ${AUTO_COMPACT_AT_TOKENS} tokens)`);
+    if (auto) info(`── auto-compact (ctx > ${autoCompactAtTokens(model)} tokens)`);
     // Flip busy so the StatusBar shows the spinner — compaction is a
     // single-shot API call that can take 5–15s on long sessions and was
     // silent before this.

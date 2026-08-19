@@ -21,7 +21,7 @@ import { WebSocketServer, WebSocket } from "ws";
 import type { RawData } from "ws";
 import * as url from "node:url";
 
-import { runAgent, estimateContextTokens, formatCost } from "./agent.js";
+import { runAgent, estimateContextTokens, formatCost, autoCompactAtTokens, autoCompactKeepTurns } from "./agent.js";
 import type { Message, ToolSchema, Model } from "./api.js";
 import { newStats, DEFAULT_MODEL, getConfig } from "./api.js";
 import { connectAll, closeAll, callMCPTool } from "./mcp.js";
@@ -45,17 +45,6 @@ import {
 // ── Config ──────────────────────────────────────────────────────────
 
 const PORT = Number(process.env.DSC_SERVE_PORT) || 9090;
-const AUTO_COMPACT_AT = (() => {
-  const v = process.env.DSC_AUTO_COMPACT_AT;
-  if (!v || v === "0" || v === "off" || v === "false") return 0;
-  const n = Number(v);
-  return Number.isFinite(n) && n > 0 ? n : 20_000;
-})();
-const AUTO_COMPACT_KEEP = (() => {
-  const v = process.env.DSC_AUTO_COMPACT_KEEP;
-  const n = Number(v);
-  return Number.isFinite(n) && n > 0 ? n : 8;
-})();
 
 function resolveAuthToken(): string | null {
   // env var wins
@@ -447,13 +436,14 @@ export async function serve(port = PORT): Promise<void> {
         }
 
         // Auto-compact if context is large
-        if (AUTO_COMPACT_AT > 0) {
+        const compactAt = autoCompactAtTokens(model);
+        if (compactAt > 0) {
           const estimated = estimateContextTokens(messages);
-          if (estimated > AUTO_COMPACT_AT) {
+          if (estimated > compactAt) {
             try {
               const result = await compactSession(
                 { id: sessionId, cwd: process.cwd(), model, messages, stats: newStats(), created_at: Date.now() },
-                AUTO_COMPACT_KEEP,
+                autoCompactKeepTurns(),
               );
               if (result) {
                 messages = result.remainingMessages;
@@ -595,11 +585,12 @@ export async function serve(port = PORT): Promise<void> {
           });
 
           // Auto-compact
-          if (AUTO_COMPACT_AT > 0) {
+          const compactAt = autoCompactAtTokens(model);
+          if (compactAt > 0) {
             const estimated = estimateContextTokens(messages);
-            if (estimated > AUTO_COMPACT_AT) {
+            if (estimated > compactAt) {
               try {
-                const result = await compactSession({ id: "", cwd: process.cwd(), model, messages, stats: newStats(), created_at: Date.now() }, AUTO_COMPACT_KEEP);
+                const result = await compactSession({ id: "", cwd: process.cwd(), model, messages, stats: newStats(), created_at: Date.now() }, autoCompactKeepTurns());
                 if (result) {
                   messages = result.remainingMessages;
                   sessionCompact = {
@@ -650,8 +641,8 @@ export async function serve(port = PORT): Promise<void> {
             () => "",
             () => { messages = []; sessionCompact = undefined; },
             async () => {
-              if (AUTO_COMPACT_AT > 0) {
-                const result = await compactSession({ id: "", cwd: process.cwd(), model, messages, stats: newStats(), created_at: Date.now() }, AUTO_COMPACT_KEEP);
+              if (autoCompactAtTokens(model) > 0) {
+                const result = await compactSession({ id: "", cwd: process.cwd(), model, messages, stats: newStats(), created_at: Date.now() }, autoCompactKeepTurns());
                 if (result) {
                   messages = result.remainingMessages;
                   sessionCompact = {

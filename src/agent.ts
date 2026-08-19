@@ -2,6 +2,7 @@ import { randomUUID } from "node:crypto";
 import {
   chatStream,
   computeCostUsd,
+  modelSpec,
   recordUsage,
   type Message,
   type Model,
@@ -447,7 +448,6 @@ export interface StatusOptions {
 }
 
 export function formatStatus(stats: Stats, model: Model, opts: StatusOptions): string {
-  const cost = computeCostUsd(stats, model);
   const flags =
     (opts.yolo ? " yolo" : "") +
     (opts.reasoning === false ? " no-reasoning" : "") +
@@ -458,7 +458,34 @@ export function formatStatus(stats: Stats, model: Model, opts: StatusOptions): s
     opts.queued && opts.queued > 0 ? `  queued:${opts.queued}` : "";
   const session =
     opts.sessionSeconds !== undefined ? `  ${formatDuration(opts.sessionSeconds)}` : "";
-  return `${model}${flags} · $${cost.toFixed(4)}  in: ${stats.prompt_tokens} (hit ${stats.cache_hit_tokens} / miss ${stats.cache_miss_tokens})  out: ${stats.completion_tokens}  tools: ${stats.tool_calls_total}${ctx}${queued}${session}`;
+  return `${model}${flags}  in: ${stats.prompt_tokens} (hit ${stats.cache_hit_tokens} / miss ${stats.cache_miss_tokens})  out: ${stats.completion_tokens}  tools: ${stats.tool_calls_total}${ctx}${queued}${session}`;
+}
+
+/**
+ * Resolve the auto-compact threshold in estimated tokens. A literal
+ * DSC_AUTO_COMPACT_AT wins (set "0" / "off" / "false" to disable). Otherwise
+ * the threshold is model-aware: 10% of the model's context window, clamped to
+ * [32_000, 96_000]. This keeps DeepSeek's 1M window from compacting at a
+ * trivially small fraction while avoiding Claude's smaller window drifting
+ * into near-limit territory.
+ */
+export function autoCompactAtTokens(model: Model): number {
+  const raw = process.env.DSC_AUTO_COMPACT_AT;
+  if (raw === "0" || raw === "off" || raw === "false") return 0;
+  if (raw) {
+    const n = Number(raw);
+    if (Number.isFinite(n) && n > 0) return n;
+  }
+  const contextWindow = modelSpec(model).contextWindow ?? 200_000;
+  const byWindow = Math.floor(contextWindow * 0.1);
+  return Math.min(96_000, Math.max(32_000, byWindow));
+}
+
+/** Resolve auto-compact keep count. Env override wins; default is 12 user turns. */
+export function autoCompactKeepTurns(): number {
+  const raw = process.env.DSC_AUTO_COMPACT_KEEP;
+  const n = Number(raw);
+  return Number.isFinite(n) && n > 0 ? n : 12;
 }
 
 // Rough estimate based on stored message bodies; 1 token ≈ 4 chars.

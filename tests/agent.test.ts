@@ -12,6 +12,8 @@ import {
   MAX_TOOL_DEPTH,
   compressToolOutput,
   toolOutputMaxChars,
+  autoCompactAtTokens,
+  autoCompactKeepTurns,
   type AgentEvents,
 } from "../src/agent.js";
 import {
@@ -562,11 +564,47 @@ describe("estimateContextTokens", () => {
   });
 });
 
+describe("autoCompactAtTokens", () => {
+  it("is model-aware: 10% of context window, clamped", () => {
+    assert.equal(autoCompactAtTokens("deepseek-v4-pro"), 96_000); // 1M → 100k, capped at 96k
+    assert.equal(autoCompactAtTokens("claude-sonnet-4-6"), 32_000); // 200k → 20k, floored at 32k
+  });
+
+  it("honors DSC_AUTO_COMPACT_AT override", () => {
+    const old = process.env.DSC_AUTO_COMPACT_AT;
+    try {
+      process.env.DSC_AUTO_COMPACT_AT = "50000";
+      assert.equal(autoCompactAtTokens("deepseek-v4-pro"), 50_000);
+      process.env.DSC_AUTO_COMPACT_AT = "off";
+      assert.equal(autoCompactAtTokens("deepseek-v4-pro"), 0);
+    } finally {
+      if (old === undefined) delete process.env.DSC_AUTO_COMPACT_AT;
+      else process.env.DSC_AUTO_COMPACT_AT = old;
+    }
+  });
+});
+
+describe("autoCompactKeepTurns", () => {
+  it("defaults to 12 and honors override", () => {
+    assert.equal(autoCompactKeepTurns(), 12);
+    const old = process.env.DSC_AUTO_COMPACT_KEEP;
+    try {
+      process.env.DSC_AUTO_COMPACT_KEEP = "6";
+      assert.equal(autoCompactKeepTurns(), 6);
+    } finally {
+      if (old === undefined) delete process.env.DSC_AUTO_COMPACT_KEEP;
+      else process.env.DSC_AUTO_COMPACT_KEEP = old;
+    }
+  });
+});
+
 describe("formatStatus", () => {
-  it("includes model name and cost", () => {
+  it("includes model name and token counters but no price", () => {
     const s = formatStatus(newStats(), "deepseek-v4-pro", { yolo: false });
     assert.match(s, /deepseek-v4-pro/);
-    assert.match(s, /\$0\.0000/);
+    assert.match(s, /in:/);
+    assert.match(s, /out:/);
+    assert.doesNotMatch(s, /\$/);
   });
 
   it("surfaces yolo / no-reasoning / compacted flags", () => {
