@@ -63,6 +63,29 @@ describe("store", () => {
     setState({ busy: false });
   });
 
+  it("keyed subscribers fire only when one of their keys changes", () => {
+    const beforeTasks = getState().agentTasks;
+    let taskFired = 0;
+    let historyFired = 0;
+    const u1 = subscribe(() => taskFired++, ["agentTasks"]);
+    const u2 = subscribe(() => historyFired++, ["history"]);
+    setState({ agentTasks: [{ id: "t", subject: "x", status: "pending" }] });
+    assert.equal(taskFired, 1);
+    assert.equal(historyFired, 0);
+
+    setState({ busy: true });
+    assert.equal(taskFired, 1);
+    assert.equal(historyFired, 0);
+
+    setState({ history: [] });
+    assert.equal(taskFired, 1);
+    assert.equal(historyFired, 1);
+
+    u1();
+    u2();
+    setState({ agentTasks: beforeTasks, history: [], busy: false });
+  });
+
   it("partial patches don't clobber unrelated fields", () => {
     setState({ inTokens: 42, outTokens: 17 });
     setState({ inTokens: 99 });

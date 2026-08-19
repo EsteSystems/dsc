@@ -116,7 +116,7 @@ let state: StoreState = {
   planRequestTitle: null,
 };
 
-type Listener = () => void;
+type Listener = { fn: () => void; keys?: string[] };
 const listeners = new Set<Listener>();
 
 export function getState(): StoreState {
@@ -126,12 +126,21 @@ export function getState(): StoreState {
 export function setState(updater: Partial<StoreState> | ((s: StoreState) => Partial<StoreState>)): void {
   const patch = typeof updater === "function" ? updater(state) : updater;
   state = { ...state, ...patch };
-  for (const l of listeners) l();
+  // A function updater can read and mutate arbitrary state, so we can't
+  // know which keys it touched — notify every listener. An object patch,
+  // however, tells us exactly which keys changed; keyed listeners only fire
+  // when at least one of their keys was touched. Unkeyed listeners keep the
+  // old "fire on every setState" contract for imperative callers.
+  const changed = typeof updater === "function" ? null : new Set(Object.keys(updater));
+  for (const l of listeners) {
+    if (!l.keys || !changed || l.keys.some((k) => changed.has(k))) l.fn();
+  }
 }
 
-export function subscribe(l: Listener): () => void {
-  listeners.add(l);
+export function subscribe(l: () => void, keys?: string[]): () => void {
+  const entry: Listener = { fn: l, keys };
+  listeners.add(entry);
   return () => {
-    listeners.delete(l);
+    listeners.delete(entry);
   };
 }

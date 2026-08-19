@@ -18,7 +18,7 @@ const COLOR: Record<AgentTask["status"], string> = {
 };
 
 export function AgentTaskList() {
-  const tasks = useStore((s) => s.agentTasks);
+  const tasks = useStore((s) => s.agentTasks, Object.is, ["agentTasks"]);
   if (tasks.length === 0) return null;
   // Hide once every task is done — the list is meant as a working view, not
   // a finished receipt. The model can still recall via task_list.

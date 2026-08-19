@@ -8,6 +8,27 @@ import { modelSpec } from "../api.js";
 const SPINNER_FRAMES = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
 const SPINNER_INTERVAL_MS = 80;
 
+// StatusBar is the only component that intentionally mirrors many fields at
+// once. Subscribing with these keys means task-list updates (which only touch
+// `agentTasks`) don't wake it — the task list re-renders alone.
+const STATUS_KEYS = [
+  "model",
+  "yolo",
+  "reasoning",
+  "compacted",
+  "cacheHitTokens",
+  "cacheMissTokens",
+  "lastPromptTokens",
+  "contextTokens",
+  "cost",
+  "inTokens",
+  "outTokens",
+  "queueDepth",
+  "busy",
+  "task",
+  "sessionSeconds",
+];
+
 function useSpinnerFrame(active: boolean): string | null {
   const [frame, setFrame] = useState(0);
   useEffect(() => {
@@ -33,7 +54,7 @@ function formatDuration(s: number): string {
 }
 
 export function StatusBar() {
-  const s = useStore((x) => x);
+  const s = useStore((x) => x, Object.is, STATUS_KEYS);
   const { stdout } = useStdout();
   const width = stdout?.columns ?? 80;
   const spinner = useSpinnerFrame(s.busy);
