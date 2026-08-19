@@ -491,6 +491,23 @@ describe("bash", () => {
     const r = await executeTool("bash", j({ command: "exit 3" }), ctx());
     assert.match(r.content, /exit_code: 3/);
   });
+
+  it("offloads oversized output to a scratch file and returns a preview", async () => {
+    const r = await executeTool(
+      "bash",
+      j({ command: `node -e "console.log('x'.repeat(20000))"` }),
+      ctx(),
+    );
+    assert.match(r.content, /output truncated/);
+    assert.match(r.content, /read_file/);
+    assert.ok((r.content?.length ?? 0) < 16000, `preview should be smaller than the full output`);
+    assert.equal(r.audit?.offloaded, true);
+    const offloadPath = r.audit?.offload_path as string | undefined;
+    assert.ok(offloadPath, "audit should record the offload path");
+    assert.ok(fs.existsSync(offloadPath!), "scratch file should exist");
+    const full = fs.readFileSync(offloadPath!, "utf8");
+    assert.ok(full.includes("x".repeat(20000)), "scratch file should contain the full output");
+  });
 });
 
 // ---------------------------------------------------------------------------

@@ -1,5 +1,6 @@
 import { promises as fs } from "node:fs";
 import { spawn, spawnSync } from "node:child_process";
+import { tmpdir } from "node:os";
 import * as path from "node:path";
 import type { ToolSchema } from "./api.js";
 import {
@@ -368,6 +369,57 @@ function withLineNumbers(text: string, offset = 1): string {
   const lines = text.split("\n");
   const width = String(offset + lines.length - 1).length;
   return lines.map((l, i) => `${String(offset + i).padStart(width, " ")}\t${l}`).join("\n");
+}
+
+// Large tool outputs are the dominant context cost (70–80% of a long
+// session). Above this char threshold we write the full result to a session
+// scratch file and return only a preview + a pointer, so the agent pays one
+// read_file call to page further instead of carrying every byte on every
+// subsequent LLM invocation.
+const OFFLOAD_THRESHOLD = 16_000;
+const OFFLOAD_PREVIEW_CHARS = 12_000;
+let offloadSeq = 0;
+
+interface OffloadResult {
+  content: string;
+  offloaded?: boolean;
+  offloadPath?: string;
+  fullBytes?: number;
+}
+
+async function offloadIfLarge(
+  ctx: ToolContext,
+  tool: string,
+  content: string,
+): Promise<OffloadResult> {
+  if (content.length <= OFFLOAD_THRESHOLD) return { content };
+  const safeSession = String(ctx.sessionId).replace(/[^a-zA-Z0-9._-]/g, "_");
+  const dir = path.join(tmpdir(), "dsc", safeSession);
+  await fs.mkdir(dir, { recursive: true });
+  offloadSeq += 1;
+  const file = path.join(dir, `${tool}-${Date.now()}-${String(offloadSeq).padStart(4, "0")}.txt`);
+  try {
+    await fs.writeFile(file, content, "utf8");
+  } catch (e) {
+    const preview = content.slice(0, OFFLOAD_PREVIEW_CHARS);
+    return {
+      content: preview + `\n\n…(output truncated; offload failed: ${(e as Error).message})`,
+    };
+  }
+  const preview = content.slice(0, OFFLOAD_PREVIEW_CHARS);
+  // `split("\n").length` is the 1-based line where the preview ended: if
+  // the cut lands mid-line, the agent re-reads that partial line; if it
+  // lands exactly on a newline, the split length is already the next line.
+  const nextOffset = preview.split("\n").length;
+  const pointer =
+    `\n\n…(output truncated; full ${content.length} bytes written to ${file}. ` +
+    `Continue with read_file({"path": ${JSON.stringify(file)}, "offset": ${nextOffset}, "limit": 2000}).)`;
+  return {
+    content: preview + pointer,
+    offloaded: true,
+    offloadPath: file,
+    fullBytes: content.length,
+  };
 }
 
 // On Windows, child.kill() only terminates cmd.exe; any grandchildren it
@@ -825,27 +877,28 @@ async function runBash(
       clearTimeout(timer);
       clearTimeout(graceTimer);
       signal?.removeEventListener("abort", onAbort);
-      const MAX = 16_000;
-      const trim = (s: string) =>
-        s.length > MAX ? s.slice(0, MAX) + `\n…(truncated, ${s.length - MAX} more chars)` : s;
-      const parts: string[] = [];
       const exitDesc = interrupted
         ? "killed (interrupted)"
         : timedOut
           ? "killed (timeout)"
           : String(code);
-      parts.push(`exit_code: ${exitDesc}`);
-      if (stdout) parts.push(`stdout:\n${trim(stdout)}`);
-      if (stderr) parts.push(`stderr:\n${trim(stderr)}`);
-      if (!stdout && !stderr) parts.push("(no output)");
-      resolve({
-        content: parts.join("\n"),
-        audit: {
-          command,
-          exit: interrupted ? "interrupted" : timedOut ? "timeout" : (code ?? null),
-          stdout_bytes: stdout.length,
-          stderr_bytes: stderr.length,
-        },
+      let full = `exit_code: ${exitDesc}`;
+      if (stdout) full += `\nstdout:\n${stdout}`;
+      if (stderr) full += `\nstderr:\n${stderr}`;
+      if (!stdout && !stderr) full += "\n(no output)";
+      void offloadIfLarge(ctx, "bash", full).then((off) => {
+        resolve({
+          content: off.content,
+          audit: {
+            command,
+            exit: interrupted ? "interrupted" : timedOut ? "timeout" : (code ?? null),
+            stdout_bytes: stdout.length,
+            stderr_bytes: stderr.length,
+            ...(off.offloaded
+              ? { offloaded: true, offload_path: off.offloadPath, full_bytes: off.fullBytes }
+              : {}),
+          },
+        });
       });
     };
 
@@ -958,12 +1011,20 @@ async function runGrep(
           audit: { ...auditBase, error: `exit_${code}` },
         });
       }
-      let out = stdout.trim();
+      const out = stdout.trim();
       const matches = out ? out.split("\n").length : 0;
-      if (out.length > GREP_MAX_OUTPUT) {
-        out = out.slice(0, GREP_MAX_OUTPUT) + `\n…(truncated; narrow the search with path or glob)`;
-      }
-      resolve({ content: out || "(no matches)", audit: { ...auditBase, matches } });
+      void offloadIfLarge(ctx, "grep", out || "(no matches)").then((off) => {
+        resolve({
+          content: off.content,
+          audit: {
+            ...auditBase,
+            matches,
+            ...(off.offloaded
+              ? { offloaded: true, offload_path: off.offloadPath, full_bytes: off.fullBytes }
+              : {}),
+          },
+        });
+      });
     });
     child.on("error", (e) => {
       signal?.removeEventListener("abort", onAbort);
@@ -1004,7 +1065,6 @@ async function runGlob(args: Record<string, unknown>, ctx: ToolContext): Promise
   return { content: out, audit: { pattern, base: cwd, matches: matches.length } };
 }
 
-const FETCH_MAX = 50_000;
 
 async function runWebFetch(
   args: Record<string, unknown>,
@@ -1048,12 +1108,21 @@ async function runWebFetch(
   }
   const rawBytes = text.length;
   if (/html|xml/i.test(ct)) text = stripHtml(text);
-  if (text.length > FETCH_MAX) {
-    text = text.slice(0, FETCH_MAX) + `\n…(truncated, ${text.length - FETCH_MAX} more chars)`;
+  if (!text) {
+    return { content: "(empty body)", audit: { url, status: res.status, content_type: ct, bytes: rawBytes } };
   }
+  const off = await offloadIfLarge(ctx, "web_fetch", text);
   return {
-    content: text || "(empty body)",
-    audit: { url, status: res.status, content_type: ct, bytes: rawBytes },
+    content: off.content,
+    audit: {
+      url,
+      status: res.status,
+      content_type: ct,
+      bytes: rawBytes,
+      ...(off.offloaded
+        ? { offloaded: true, offload_path: off.offloadPath, full_bytes: off.fullBytes }
+        : {}),
+    },
   };
 }
 
