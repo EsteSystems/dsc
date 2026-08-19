@@ -136,7 +136,7 @@ const HELP_LINES = [
   "/preferences [reset]    show or clear persisted slash-set settings",
   "/compact [keep]         summarize old turns (default keep=4)",
   "/transcript             dump full message log",
-  "/audit [path|show N]    audit log info",
+  "/audit [path|show N|verify]  audit log info / integrity",
   "/queue [clear]          list or clear queued prompts",
   "/export [path]          write current session JSON for transfer",
   "/import <path>          load session JSON; rebinds cwd here (--keep-cwd to skip)",
@@ -779,6 +779,9 @@ export async function dispatchSlash(line: string, ctx: SlashContext): Promise<bo
       const sub = arg.trim();
       if (!sub || sub === "path") {
         emit(audit.auditLogPath());
+      } else if (sub === "verify") {
+        const result = await audit.verifyAuditLog();
+        emit(result.message);
       } else if (sub.startsWith("show")) {
         const nRaw = sub.replace(/^show\s*/, "").trim();
         const limit = (() => {
@@ -793,7 +796,7 @@ export async function dispatchSlash(line: string, ctx: SlashContext): Promise<bo
           emit("(no audit log yet)");
         }
       } else {
-        emit("error: usage: /audit | /audit path | /audit show [N]");
+        emit("error: usage: /audit | /audit path | /audit show [N] | /audit verify");
       }
       return true;
     }
